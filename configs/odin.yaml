@@ -8,7 +8,7 @@ classify_model: assets/tiny_resnet.onnx
 yolo11_model_path: assets/yolo11.xml
 yolov8_model_path: assets/yolov8.xml
 yolov5_model_path: assets/yolov5.xml
-device: GPU
+device: CPU
 min_confidence: 0.8
 use_traditional: true
 
@@ -35,8 +35,8 @@ usb_gain: 10 #0-96
 
 #####-----工业相机参数-----#####
 camera_name: "hikrobot"
-exposure_ms: 0.8
-gain: 16.9
+exposure_ms: 3.0
+gain: 16.0
 vid_pid: "2bdf:0001"
 
 #####-----传统方法参数-----#####
@@ -96,4 +96,4 @@ R_camera2gimbal: [0.01928451708725664, 0.00012696140743255463, 0.999814028348028
 t_camera2gimbal: [0.13089617453251859, 0.0038468007459533785, 0.094139945222010288]
 
 #####-----gimbal参数（VCP串口）-----#####
-com_port: "/dev/gimbal"  # USB虚拟串口设备
+com_port: "/dev/ttyACM0"  # USB虚拟串口设备
