@@ -4,6 +4,7 @@
 
 #include "io/camera.hpp"
 #include "io/dm_imu/dm_imu.hpp"
+#include "io/gimbal/gimbal.hpp"
 #include "tasks/auto_aim/aimer.hpp"
 #include "tasks/auto_aim/detector.hpp"
 #include "tasks/auto_aim/shooter.hpp"

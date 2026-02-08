@@ -10,20 +10,12 @@
 #include <tuple>
 
 #include "io/command.hpp"
+#include "io/mode.hpp"
 #include "serial/serial.h"
 #include "tools/thread_safe_queue.hpp"
 
 namespace io
 {
-// CBoard兼容的Mode枚举（用于统一接口）
-enum Mode
-{
-  idle = 0,
-  auto_aim = 1,
-  small_buff = 2,
-  big_buff = 3,
-  outpost = 4  // 预留
-};
 
 struct __attribute__((packed)) GimbalToVision
 {
