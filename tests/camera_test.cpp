@@ -21,7 +21,7 @@ int main(int argc, char * argv[])
 
   tools::Exiter exiter;
 
-  auto config_path = cli.get<std::string>("config-path");
+  auto config_path = (argc > 1 && argv[1][0] != '-') ? argv[1] : cli.get<std::string>("config-path");
   auto display = cli.has("display");
   io::Camera camera(config_path);
 
