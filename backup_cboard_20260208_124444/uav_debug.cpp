@@ -37,7 +37,7 @@ int main(int argc, char * argv[])
   tools::Recorder recorder;
 
   io::Camera camera(config_path);
-  io::Gimbal cboard(config_path);
+  io::CBoard cboard(config_path);
 
   auto_aim::Detector detector(config_path);
   auto_aim::Solver solver(config_path);
@@ -58,7 +58,7 @@ int main(int argc, char * argv[])
   while (!exiter.exit()) {
     camera.read(img, t);
     q = cboard.imu_at(t - 1ms);
-    mode = cboard.mode_cboard;
+    mode = cboard.mode;
     // recorder.record(img, q, t);
     if (last_mode != mode) {
       tools::logger()->info("Switch to {}", io::MODES[mode]);

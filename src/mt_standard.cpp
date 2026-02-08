@@ -42,7 +42,7 @@ int main(int argc, char * argv[])
   tools::Recorder recorder;
 
   io::Camera camera(config_path);
-  io::CBoard cboard(config_path);
+  io::Gimbal cboard(config_path);
 
   auto_aim::multithread::MultiThreadDetector detector(config_path);
   auto_aim::Solver solver(config_path);
@@ -75,7 +75,7 @@ int main(int argc, char * argv[])
   });
 
   while (!exiter.exit()) {
-    mode = cboard.mode;
+    mode = cboard.mode_cboard;
 
     if (last_mode != mode) {
       tools::logger()->info("Switch to {}", io::MODES[mode]);

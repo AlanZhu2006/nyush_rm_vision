@@ -103,5 +103,3 @@ model: "assets/yolo11_buff_int8.xml"
 #####-----buff_aimer参数-----#####
 fire_gap_time: 0.600   # s
 predict_time: 0.090     # s
-#####-----gimbal参数（VCP串口）-----#####
-com_port: "/dev/gimbal"  # USB虚拟串口设备

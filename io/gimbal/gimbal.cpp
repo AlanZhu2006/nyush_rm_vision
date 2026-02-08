@@ -174,21 +174,29 @@ void Gimbal::read_thread()
     state_.bullet_speed = rx_data_.bullet_speed;
     state_.bullet_count = rx_data_.bullet_count;
 
+    // 更新CBoard兼容的公共成员变量
+    bullet_speed = rx_data_.bullet_speed;
+
     switch (rx_data_.mode) {
       case 0:
         mode_ = GimbalMode::IDLE;
+        mode_cboard = idle;
         break;
       case 1:
         mode_ = GimbalMode::AUTO_AIM;
+        mode_cboard = auto_aim;
         break;
       case 2:
         mode_ = GimbalMode::SMALL_BUFF;
+        mode_cboard = small_buff;
         break;
       case 3:
         mode_ = GimbalMode::BIG_BUFF;
+        mode_cboard = big_buff;
         break;
       default:
         mode_ = GimbalMode::IDLE;
+        mode_cboard = idle;
         tools::logger()->warn("[Gimbal] Invalid mode: {}", rx_data_.mode);
         break;
     }
