@@ -1,6 +1,8 @@
 #include <fmt/core.h>
 
+#include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <opencv2/opencv.hpp>
 #include <thread>
 
@@ -14,6 +16,26 @@ const std::string keys =
   "{@config-path   | | Path to YAML config file}";
 
 using namespace std::chrono_literals;
+
+namespace
+{
+Eigen::Vector3d quaternion_to_rm_euler_deg(const Eigen::Quaterniond & q)
+{
+  const double w = q.w();
+  const double x = q.x();
+  const double y = q.y();
+  const double z = q.z();
+
+  // Keep the same convention as nyush-rm-control/modules/imu/ins_task.c::QuaternionToEularAngle:
+  // yaw(z), pitch(x), roll(y), all in degrees.
+  const double yaw = std::atan2(2.0 * (w * z + x * y), 2.0 * (w * w + x * x) - 1.0);
+  const double pitch = std::atan2(2.0 * (w * x + y * z), 2.0 * (w * w + z * z) - 1.0);
+  const double roll = std::asin(std::clamp(2.0 * (w * y - x * z), -1.0, 1.0));
+
+  constexpr double RAD2DEG = 180.0 / M_PI;
+  return {yaw * RAD2DEG, pitch * RAD2DEG, roll * RAD2DEG};
+}
+}  // namespace
 
 int main(int argc, char * argv[])
 {
@@ -65,11 +87,12 @@ int main(int argc, char * argv[])
     auto state = gimbal.state();
     auto mode = gimbal.mode();
 
-    // Convert quaternion to euler angles (ZYX order: yaw-pitch-roll)
-    auto ypr = tools::eulers(q, 2, 1, 0);
-    double yaw_deg = ypr[0] * 180.0 / M_PI;
-    double pitch_deg = ypr[1] * 180.0 / M_PI;
-    double roll_deg = ypr[2] * 180.0 / M_PI;
+    // Convert quaternion using the same Euler convention as lower machine firmware.
+    // This avoids pitch/roll name confusion when checking protocol consistency.
+    auto ypr_deg = quaternion_to_rm_euler_deg(q);
+    double yaw_deg = ypr_deg[0];
+    double pitch_deg = ypr_deg[1];
+    double roll_deg = ypr_deg[2];
 
     // Statistics for communication quality
     frame_count++;
