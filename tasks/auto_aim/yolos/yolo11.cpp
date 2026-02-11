@@ -1,6 +1,7 @@
 #include "yolo11.hpp"
 
 #include <fmt/chrono.h>
+#include <opencv2/dnn.hpp>
 #include <yaml-cpp/yaml.h>
 
 #include <filesystem>
@@ -17,6 +18,16 @@ YOLO11::YOLO11(const std::string & config_path, bool debug)
 
   model_path_ = yaml["yolo11_model_path"].as<std::string>();
   device_ = yaml["device"].as<std::string>();
+  if (yaml["backend"]) {
+    backend_ = yaml["backend"].as<std::string>();
+  } else {
+    backend_ = "openvino";
+  }
+  if (backend_ == "tensorrt") {
+    if (yaml["yolo11_trt_engine_path"]) {
+      model_path_ = yaml["yolo11_trt_engine_path"].as<std::string>();
+    }
+  }
   binary_threshold_ = yaml["threshold"].as<double>();
   min_confidence_ = yaml["min_confidence"].as<double>();
   int x = 0, y = 0, width = 0, height = 0;
@@ -30,27 +41,35 @@ YOLO11::YOLO11(const std::string & config_path, bool debug)
 
   save_path_ = "imgs";
   std::filesystem::create_directory(save_path_);
-  auto model = core_.read_model(model_path_);
-  ov::preprocess::PrePostProcessor ppp(model);
-  auto & input = ppp.input();
+  if (backend_ == "tensorrt") {
+#ifdef USE_TENSORRT
+    trt_engine_ = std::make_unique<tools::TrtEngine>(model_path_, 3, 640, 640);
+#else
+    throw std::runtime_error("TensorRT backend requested but USE_TENSORRT is OFF");
+#endif
+  } else {
+    auto model = core_.read_model(model_path_);
+    ov::preprocess::PrePostProcessor ppp(model);
+    auto & input = ppp.input();
 
-  input.tensor()
-    .set_element_type(ov::element::u8)
-    .set_shape({1, 640, 640, 3})
-    .set_layout("NHWC")
-    .set_color_format(ov::preprocess::ColorFormat::BGR);
+    input.tensor()
+      .set_element_type(ov::element::u8)
+      .set_shape({1, 640, 640, 3})
+      .set_layout("NHWC")
+      .set_color_format(ov::preprocess::ColorFormat::BGR);
 
-  input.model().set_layout("NCHW");
+    input.model().set_layout("NCHW");
 
-  input.preprocess()
-    .convert_element_type(ov::element::f32)
-    .convert_color(ov::preprocess::ColorFormat::RGB)
-    .scale(255.0);
+    input.preprocess()
+      .convert_element_type(ov::element::f32)
+      .convert_color(ov::preprocess::ColorFormat::RGB)
+      .scale(255.0);
 
-  // TODO: ov::hint::performance_mode(ov::hint::PerformanceMode::LATENCY)
-  model = ppp.build();
-  compiled_model_ = core_.compile_model(
-    model, device_, ov::hint::performance_mode(ov::hint::PerformanceMode::LATENCY));
+    // TODO: ov::hint::performance_mode(ov::hint::PerformanceMode::LATENCY)
+    model = ppp.build();
+    compiled_model_ = core_.compile_model(
+      model, device_, ov::hint::performance_mode(ov::hint::PerformanceMode::LATENCY));
+  }
 }
 
 std::list<Armor> YOLO11::detect(const cv::Mat & raw_img, int frame_count)
@@ -84,6 +103,22 @@ std::list<Armor> YOLO11::detect(const cv::Mat & raw_img, int frame_count)
   auto input = cv::Mat(640, 640, CV_8UC3, cv::Scalar(0, 0, 0));
   auto roi = cv::Rect(0, 0, w, h);
   cv::resize(bgr_img, input(roi), {w, h});
+  if (backend_ == "tensorrt") {
+#ifdef USE_TENSORRT
+    cv::Mat blob = cv::dnn::blobFromImage(
+      input, 1.0 / 255.0, cv::Size(), cv::Scalar(), true, false, CV_32F);
+    auto output_data = trt_engine_->infer(blob.ptr<float>(), blob.total());
+    auto shape = trt_engine_->output_shape();
+    if (shape.size() != 3) {
+      throw std::runtime_error("Unexpected TensorRT output shape");
+    }
+    cv::Mat output(shape[1], shape[2], CV_32F, output_data.data());
+    return parse(scale, output, raw_img, frame_count);
+#else
+    throw std::runtime_error("TensorRT backend requested but USE_TENSORRT is OFF");
+#endif
+  }
+
   ov::Tensor input_tensor(ov::element::u8, {1, 640, 640, 3}, input.data);
 
   /// infer

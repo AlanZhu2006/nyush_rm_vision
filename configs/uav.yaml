@@ -8,7 +8,11 @@ classify_model: assets/tiny_resnet.onnx
 yolo11_model_path: assets/yolo11.xml
 yolov8_model_path: assets/yolov8.xml
 yolov5_model_path: assets/yolov5.xml
+yolov5_trt_engine_path: assets/yolov5.plan
+yolov8_trt_engine_path: assets/yolov8.plan
+yolo11_trt_engine_path: assets/yolo11.plan
 device: CPU
+backend: openvino
 min_confidence: 0.8
 use_traditional: true
 
@@ -52,7 +56,6 @@ min_armor_ratio: 1
 max_armor_ratio: 5
 max_side_ratio: 1.5
 max_rectangular_error: 25 # degree
-min_confidence: 0.8
 
 #####-----cboard参数-----#####
 quaternion_canid: 0x001
@@ -99,6 +102,7 @@ t_camera2gimbal: [-0.034955523715399906, -0.000074403211899371, 0.00124817391010
 
 #####-----buff_detector参数-----#####
 model: "assets/yolo11_buff_int8.xml"
+buff_trt_engine_path: "assets/yolo11_buff.plan"
 
 #####-----buff_aimer参数-----#####
 fire_gap_time: 0.600   # s

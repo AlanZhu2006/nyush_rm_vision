@@ -1,5 +1,7 @@
 #include "yolo11_buff.hpp"
 
+#include <opencv2/dnn.hpp>
+
 const double ConfidenceThreshold = 0.7f;
 const double IouThreshold = 0.4f;
 namespace auto_buff
@@ -8,15 +10,34 @@ YOLO11_BUFF::YOLO11_BUFF(const std::string & config)
 {
   auto yaml = YAML::LoadFile(config);
   std::string model_path = yaml["model"].as<std::string>();
-  model = core.read_model(model_path);
-  // printInputAndOutputsInfo(*model);  // 打印模型信息
-  /// 载入并编译模型
-  compiled_model = core.compile_model(model, "CPU");
-  /// 创建推理请求
-  infer_request = compiled_model.create_infer_request();
-  // 获取模型输入节点
-  input_tensor = infer_request.get_input_tensor();
-  input_tensor.set_shape({1, 3, 640, 640});
+  if (yaml["backend"]) {
+    backend_ = yaml["backend"].as<std::string>();
+  } else {
+    backend_ = "openvino";
+  }
+  if (backend_ == "tensorrt") {
+    if (yaml["buff_trt_engine_path"]) {
+      model_path = yaml["buff_trt_engine_path"].as<std::string>();
+    }
+  }
+
+  if (backend_ == "tensorrt") {
+#ifdef USE_TENSORRT
+    trt_engine_ = std::make_unique<tools::TrtEngine>(model_path, 3, 640, 640);
+#else
+    throw std::runtime_error("TensorRT backend requested but USE_TENSORRT is OFF");
+#endif
+  } else {
+    model = core.read_model(model_path);
+    // printInputAndOutputsInfo(*model);  // 打印模型信息
+    /// 载入并编译模型
+    compiled_model = core.compile_model(model, "CPU");
+    /// 创建推理请求
+    infer_request = compiled_model.create_infer_request();
+    // 获取模型输入节点
+    input_tensor = infer_request.get_input_tensor();
+    input_tensor.set_shape({1, 3, 640, 640});
+  }
 }
 
 std::vector<YOLO11_BUFF::Object> YOLO11_BUFF::get_multicandidateboxes(cv::Mat & image)
@@ -40,25 +61,45 @@ std::vector<YOLO11_BUFF::Object> YOLO11_BUFF::get_multicandidateboxes(cv::Mat & 
   auto h = static_cast<int>(bgr_img.rows * scale);
   auto w = static_cast<int>(bgr_img.cols * scale);
 
-  double factor = scale;  
+  double factor = 1.0 / scale;
 
   // preproces
   auto input = cv::Mat(640, 640, CV_8UC3, cv::Scalar(0, 0, 0));
   auto roi = cv::Rect(0, 0, w, h);
   cv::resize(bgr_img, input(roi), {w, h});
-  ov::Tensor input_tensor(ov::element::u8, {1, 640, 640, 3}, input.data);
+  const float * output_buffer = nullptr;
+  int out_rows = 0;
+  int out_cols = 0;
+  std::vector<float> trt_output;
+  if (backend_ == "tensorrt") {
+#ifdef USE_TENSORRT
+    cv::Mat blob = cv::dnn::blobFromImage(
+      input, 1.0 / 255.0, cv::Size(), cv::Scalar(), true, false, CV_32F);
+    trt_output = trt_engine_->infer(blob.ptr<float>(), blob.total());
+    auto shape = trt_engine_->output_shape();
+    if (shape.size() != 3) {
+      throw std::runtime_error("Unexpected TensorRT output shape");
+    }
+    out_rows = static_cast<int>(shape[1]);
+    out_cols = static_cast<int>(shape[2]);
+    output_buffer = trt_output.data();
+#else
+    throw std::runtime_error("TensorRT backend requested but USE_TENSORRT is OFF");
+#endif
+  } else {
+    ov::Tensor input_tensor(ov::element::u8, {1, 640, 640, 3}, input.data);
 
-  /// 执行推理计算
-  infer_request.infer();
+    /// 执行推理计算
+    infer_request.infer();
 
-  /// 处理推理计算结果
-  const ov::Tensor output = infer_request.get_output_tensor();  // 获得推理结果
-  const ov::Shape output_shape = output.get_shape();
-  const float * output_buffer = output.data<const float>();
-  const int out_rows = output_shape[1];  // 获得"output"节点的rows 15
-  const int out_cols = output_shape[2];  // 获得"output"节点的cols 8400
-  const cv::Mat det_output(
-    out_rows, out_cols, CV_32F, (float *)output_buffer);  // output_buff类型转换
+    /// 处理推理计算结果
+    const ov::Tensor output = infer_request.get_output_tensor();  // 获得推理结果
+    const ov::Shape output_shape = output.get_shape();
+    output_buffer = output.data<const float>();
+    out_rows = output_shape[1];  // 获得"output"节点的rows 15
+    out_cols = output_shape[2];  // 获得"output"节点的cols 8400
+  }
+  const cv::Mat det_output(out_rows, out_cols, CV_32F, (float *)output_buffer);
   std::vector<cv::Rect> boxes;                            // 目标框
   std::vector<float> confidences;                         // 置信度
   std::vector<std::vector<float>> objects_keypoints;      // 关键点
@@ -149,21 +190,52 @@ std::vector<YOLO11_BUFF::Object> YOLO11_BUFF::get_onecandidatebox(cv::Mat & imag
   const int64 start = cv::getTickCount();  // 设置模型输入
 
   /// 预处理
-  const float factor = fill_tensor_data_image(input_tensor, image);  // 填充图片到合适的input size
+  float factor = 1.0f;
+  const float * output_buffer = nullptr;
+  int out_rows = 0;
+  int out_cols = 0;
+  std::vector<float> trt_output;
+  if (backend_ == "tensorrt") {
+#ifdef USE_TENSORRT
+    auto input = cv::Mat(640, 640, CV_8UC3, cv::Scalar(0, 0, 0));
+    auto x_scale = static_cast<double>(640) / image.rows;
+    auto y_scale = static_cast<double>(640) / image.cols;
+    auto scale = std::min(x_scale, y_scale);
+    auto h = static_cast<int>(image.rows * scale);
+    auto w = static_cast<int>(image.cols * scale);
+    factor = static_cast<float>(1.0 / scale);
+    auto roi = cv::Rect(0, 0, w, h);
+    cv::resize(image, input(roi), {w, h});
 
-  /// 执行推理计算
+    cv::Mat blob = cv::dnn::blobFromImage(
+      input, 1.0 / 255.0, cv::Size(), cv::Scalar(), true, false, CV_32F);
+    trt_output = trt_engine_->infer(blob.ptr<float>(), blob.total());
+    auto shape = trt_engine_->output_shape();
+    if (shape.size() != 3) {
+      throw std::runtime_error("Unexpected TensorRT output shape");
+    }
+    out_rows = static_cast<int>(shape[1]);
+    out_cols = static_cast<int>(shape[2]);
+    output_buffer = trt_output.data();
+#else
+    throw std::runtime_error("TensorRT backend requested but USE_TENSORRT is OFF");
+#endif
+  } else {
+    factor = fill_tensor_data_image(input_tensor, image);  // 填充图片到合适的input size
 
-  infer_request.infer();
+    /// 执行推理计算
 
-  /// 处理推理计算结果  output 输出格式是[17,8400], 每列代表一个框(即最多有8400个框), 前面4行分别是[cx, cy, ow, oh], 中间score, 最后6*2关键点
+    infer_request.infer();
 
-  const ov::Tensor output = infer_request.get_output_tensor();  // 获得推理结果
-  const ov::Shape output_shape = output.get_shape();
-  const float * output_buffer = output.data<const float>();
-  const int out_rows = output_shape[1];  // 获得"output"节点的rows 17
-  const int out_cols = output_shape[2];  // 获得"output"节点的cols 8400
-  const cv::Mat det_output(
-    out_rows, out_cols, CV_32F, (float *)output_buffer);  // output_buff类型转换
+    /// 处理推理计算结果  output 输出格式是[17,8400], 每列代表一个框(即最多有8400个框), 前面4行分别是[cx, cy, ow, oh], 中间score, 最后6*2关键点
+
+    const ov::Tensor output = infer_request.get_output_tensor();  // 获得推理结果
+    const ov::Shape output_shape = output.get_shape();
+    output_buffer = output.data<const float>();
+    out_rows = output_shape[1];  // 获得"output"节点的rows 17
+    out_cols = output_shape[2];  // 获得"output"节点的cols 8400
+  }
+  const cv::Mat det_output(out_rows, out_cols, CV_32F, (float *)output_buffer);
 
   /// 寻找置信度最大的框
 

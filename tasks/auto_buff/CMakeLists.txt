@@ -13,3 +13,7 @@ add_library(auto_buff OBJECT
 )
 
 target_link_libraries(auto_buff auto_aim openvino::runtime ${CERES_LIBRARIES})
+
+if(USE_TENSORRT)
+    target_link_libraries(auto_buff tensorrt)
+endif()
