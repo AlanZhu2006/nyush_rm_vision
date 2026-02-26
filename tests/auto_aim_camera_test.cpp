@@ -19,7 +19,8 @@ using namespace std::chrono_literals;
 const std::string keys =
   "{help h usage ? |                           | 输出命令行参数说明 }"
   "{@config-path   | configs/standard.yaml     | yaml配置文件的路径}"
-  "{log-interval l | 10                        | 终端输出间隔帧数  }";
+  "{log-interval l | 10                        | 终端输出间隔帧数  }"
+  "{send s         |                           | 发送控制到下位机  }";
 
 int main(int argc, char * argv[])
 {
@@ -31,10 +32,13 @@ int main(int argc, char * argv[])
 
   auto config_path = cli.get<std::string>(0);
   auto log_interval = cli.get<int>("log-interval");
+  auto send_to_gimbal = cli.has("send");
   if (config_path.empty()) {
     cli.printMessage();
     return 0;
   }
+
+  tools::logger()->info("auto_aim_camera_test started, send={}", send_to_gimbal);
 
   tools::Exiter exiter;
 
@@ -69,7 +73,9 @@ int main(int argc, char * argv[])
       command.shoot = false;
     }
 
-    cboard.send(command);
+    if (send_to_gimbal) {
+      cboard.send(command);
+    }
 
     auto now = std::chrono::steady_clock::now();
     auto dt = tools::delta_time(now, last_stamp);
@@ -78,22 +84,36 @@ int main(int argc, char * argv[])
     frame_count++;
     if (mode == io::Mode::auto_aim && frame_count % log_interval == 0) {
       tools::logger()->info(
-        "cmd: control={} yaw={:.2f} pitch={:.2f} shoot={} | fps {:.2f}",
-        command.control, command.yaw * 57.3, command.pitch * 57.3, command.shoot, 1.0 / dt);
+        "tx:{} cmd: control={} yaw={:.2f} pitch={:.2f} shoot={} | fps {:.2f}",
+        send_to_gimbal, command.control, command.yaw * 57.3, command.pitch * 57.3,
+        command.shoot, 1.0 / dt);
+    }
+
+    for (const auto & armor : armors) {
+      tools::draw_points(img, armor.points, {0, 255, 0});
+      tools::draw_text(
+        img, fmt::format("{} {:.2f}", auto_aim::ARMOR_NAMES[armor.name], armor.confidence),
+        armor.center, {0, 255, 0}, 0.6, 2);
     }
 
     tools::draw_text(
       img,
       fmt::format(
-        "mode:{}", io::MODES[mode]),
+        "mode:{} armors:{} tx:{}", io::MODES[mode], armors.size(), send_to_gimbal),
       {10, 30}, {255, 255, 255});
 
     tools::draw_text(
       img,
       fmt::format(
-        "cmd: {} yaw:{:.2f} pitch:{:.2f} shoot:{}",
-        command.control, command.yaw * 57.3, command.pitch * 57.3, command.shoot),
+        "cmd(rad): ctl:{} yaw:{:.4f} pitch:{:.4f} shoot:{}",
+        command.control, command.yaw, command.pitch, command.shoot),
       {10, 60}, {154, 50, 205});
+
+    tools::draw_text(
+      img,
+      fmt::format(
+        "cmd(deg): yaw:{:.2f} pitch:{:.2f}", command.yaw * 57.3, command.pitch * 57.3),
+      {10, 90}, {154, 50, 205});
 
     cv::imshow("auto_aim_camera_test", img);
     if (cv::waitKey(1) == 'q') break;
