@@ -99,11 +99,18 @@ run-mt config=default_config build_dir=default_build_dir:
 run-imu-test config=default_config build_dir=default_build_dir:
   ./{{build_dir}}/imu_communication_test {{config}}
 
-# Unified test entry (e.g. `just test imu`).
-test name="imu" config=default_config build_dir=default_build_dir:
-  @case "{{name}}" in \
-    imu) ./{{build_dir}}/imu_communication_test {{config}} ;; \
-    *) echo "[test] Unknown test '{{name}}'. Supported: imu" >&2; exit 1 ;; \
+# Unified test entry (e.g. `just test imu`, `just test camera -display`).
+test name="imu" arg="" config=default_config build_dir=default_build_dir:
+  @cfg="{{config}}"; display="false"; \
+  if [[ "{{arg}}" == "-display" || "{{arg}}" == "--display" ]]; then \
+    display="true"; \
+  elif [[ -n "{{arg}}" ]]; then \
+    cfg="{{arg}}"; \
+  fi; \
+  case "{{name}}" in \
+    imu) ./{{build_dir}}/imu_communication_test "${cfg}" ;; \
+    camera) if [[ "${display}" == "true" ]]; then ./{{build_dir}}/camera_test "${cfg}" -d; else ./{{build_dir}}/camera_test "${cfg}"; fi ;; \
+    *) echo "[test] Unknown test '{{name}}'. Supported: imu, camera" >&2; exit 1 ;; \
   esac
 
 # Run gimbal response test on yaw axis.
