@@ -6,7 +6,7 @@ default:
 default_build_dir := "build"
 default_cmake_generator := "Unix Makefiles"
 default_config := "configs/odin.yaml"
-default_jobs := "12"
+default_jobs := "4"
 default_profile := "Release"
 default_use_tensorrt := "OFF"
 default_openvino_dir := ""
