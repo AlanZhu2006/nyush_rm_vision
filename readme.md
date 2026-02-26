@@ -81,6 +81,27 @@ IMU型号：使用C板内置BMI088作为IMU\
     make -C build/ -j`nproc`
     ```
 
+2.1 使用 `just` 封装常用命令（推荐）
+    ```bash
+    # 查看可用命令
+    just --list
+
+    # 配置（自动尝试历史 OpenVINO 路径）
+    just cmake
+
+    # 编译
+    just make
+
+    # 一步完成“首次配置 + 编译”
+    just build
+
+    # 只编译核心目标
+    just make-core
+
+    # 运行主程序（多线程入口）
+    just run-mt config=configs/standard3.yaml
+    ```
+
 3. 运行demo:
     ```bash
     ./build/auto_aim_test
