@@ -77,11 +77,12 @@ IMU型号：使用C板内置BMI088作为IMU\
 
 2. 编译：
     ```bash
-    cmake -B build
+    cmake -G "Unix Makefiles" -B build
     make -C build/ -j`nproc`
     ```
 
 2.1 使用 `just` 封装常用命令（推荐）
+    注：建议使用默认参数或位置参数，不要用 `key=value` 形式传参。
     ```bash
     # 查看可用命令
     just --list
@@ -98,8 +99,11 @@ IMU型号：使用C板内置BMI088作为IMU\
     # 只编译核心目标
     just make-core
 
-    # 运行主程序（多线程入口）
-    just run-mt config=configs/standard3.yaml
+    # 运行主程序（多线程入口，默认 configs/standard3.yaml）
+    just run-mt
+
+    # 指定配置文件
+    just run-mt configs/standard3.yaml
     ```
 
 3. 运行demo:

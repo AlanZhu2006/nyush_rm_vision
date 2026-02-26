@@ -4,6 +4,7 @@ default:
   @just --list
 
 default_build_dir := "build"
+default_cmake_generator := "Unix Makefiles"
 default_config := "configs/odin.yaml"
 default_jobs := "12"
 default_profile := "Release"
@@ -12,7 +13,22 @@ default_openvino_dir := ""
 
 # Configure project (auto picks OpenVINO_DIR if available).
 cmake build_dir=default_build_dir profile=default_profile use_tensorrt=default_use_tensorrt openvino_dir=default_openvino_dir:
-  @ov_dir="{{openvino_dir}}"; \
+  @if [[ -f "{{build_dir}}/CMakeCache.txt" ]]; then \
+    generator=""; \
+    while IFS= read -r line; do \
+      if [[ "${line}" == CMAKE_GENERATOR:INTERNAL=* ]]; then \
+        generator="${line#CMAKE_GENERATOR:INTERNAL=}"; \
+        break; \
+      fi; \
+    done < "{{build_dir}}/CMakeCache.txt"; \
+    if [[ -n "${generator}" && "${generator}" != "{{default_cmake_generator}}" ]]; then \
+      echo "[cmake] Switching generator from '${generator}' to {{default_cmake_generator}}, resetting cache..."; \
+      rm -f "{{build_dir}}/CMakeCache.txt"; \
+      rm -rf "{{build_dir}}/CMakeFiles"; \
+      rm -f "{{build_dir}}/build.ninja"; \
+    fi; \
+  fi; \
+  ov_dir="{{openvino_dir}}"; \
   if [[ -z "${ov_dir}" && -n "${OpenVINO_DIR:-}" ]]; then \
     ov_dir="${OpenVINO_DIR}"; \
   fi; \
@@ -21,10 +37,10 @@ cmake build_dir=default_build_dir profile=default_profile use_tensorrt=default_u
   fi; \
   if [[ -n "${ov_dir}" ]]; then \
     echo "[cmake] Using OpenVINO_DIR=${ov_dir}"; \
-    command cmake -S . -B {{build_dir}} -DCMAKE_BUILD_TYPE={{profile}} -DUSE_TENSORRT={{use_tensorrt}} -DOpenVINO_DIR="${ov_dir}"; \
+    command cmake -G "{{default_cmake_generator}}" -S . -B {{build_dir}} -DCMAKE_BUILD_TYPE={{profile}} -DUSE_TENSORRT={{use_tensorrt}} -DOpenVINO_DIR="${ov_dir}"; \
   else \
     echo "[cmake] OpenVINO_DIR not set, trying system default"; \
-    command cmake -S . -B {{build_dir}} -DCMAKE_BUILD_TYPE={{profile}} -DUSE_TENSORRT={{use_tensorrt}}; \
+    command cmake -G "{{default_cmake_generator}}" -S . -B {{build_dir}} -DCMAKE_BUILD_TYPE={{profile}} -DUSE_TENSORRT={{use_tensorrt}}; \
   fi
 
 # Build all targets or one specific target.
@@ -39,24 +55,9 @@ make target="" build_dir=default_build_dir jobs=default_jobs:
 make-core build_dir=default_build_dir jobs=default_jobs:
   command cmake --build {{build_dir}} --target standard mt_standard imu_communication_test gimbal_response_test gimbal_test -j{{jobs}}
 
-# One-step configure + build (runs cmake first time automatically).
+# One-step configure + build (always runs cmake first).
 build target="" build_dir=default_build_dir profile=default_profile use_tensorrt=default_use_tensorrt openvino_dir=default_openvino_dir jobs=default_jobs:
-  @if [[ ! -f "{{build_dir}}/CMakeCache.txt" ]]; then \
-    ov_dir="{{openvino_dir}}"; \
-    if [[ -z "${ov_dir}" && -n "${OpenVINO_DIR:-}" ]]; then \
-      ov_dir="${OpenVINO_DIR}"; \
-    fi; \
-    if [[ -z "${ov_dir}" && -d "/home/nyu/venvs/spvision/lib/python3.10/site-packages/openvino/cmake" ]]; then \
-      ov_dir="/home/nyu/venvs/spvision/lib/python3.10/site-packages/openvino/cmake"; \
-    fi; \
-    if [[ -n "${ov_dir}" ]]; then \
-      echo "[cmake] Using OpenVINO_DIR=${ov_dir}"; \
-      command cmake -S . -B {{build_dir}} -DCMAKE_BUILD_TYPE={{profile}} -DUSE_TENSORRT={{use_tensorrt}} -DOpenVINO_DIR="${ov_dir}"; \
-    else \
-      echo "[cmake] OpenVINO_DIR not set, trying system default"; \
-      command cmake -S . -B {{build_dir}} -DCMAKE_BUILD_TYPE={{profile}} -DUSE_TENSORRT={{use_tensorrt}}; \
-    fi; \
-  fi
+  just cmake "{{build_dir}}" "{{profile}}" "{{use_tensorrt}}" "{{openvino_dir}}"
   @if [[ -n "{{target}}" ]]; then \
     command cmake --build {{build_dir}} --target {{target}} -j{{jobs}}; \
   else \
@@ -74,10 +75,10 @@ rebuild-core build_dir=default_build_dir profile=default_profile use_tensorrt=de
   fi; \
   if [[ -n "${ov_dir}" ]]; then \
     echo "[cmake] Using OpenVINO_DIR=${ov_dir}"; \
-    command cmake -S . -B {{build_dir}} -DCMAKE_BUILD_TYPE={{profile}} -DUSE_TENSORRT={{use_tensorrt}} -DOpenVINO_DIR="${ov_dir}"; \
+    command cmake -G "{{default_cmake_generator}}" -S . -B {{build_dir}} -DCMAKE_BUILD_TYPE={{profile}} -DUSE_TENSORRT={{use_tensorrt}} -DOpenVINO_DIR="${ov_dir}"; \
   else \
     echo "[cmake] OpenVINO_DIR not set, trying system default"; \
-    command cmake -S . -B {{build_dir}} -DCMAKE_BUILD_TYPE={{profile}} -DUSE_TENSORRT={{use_tensorrt}}; \
+    command cmake -G "{{default_cmake_generator}}" -S . -B {{build_dir}} -DCMAKE_BUILD_TYPE={{profile}} -DUSE_TENSORRT={{use_tensorrt}}; \
   fi
   command cmake --build {{build_dir}} --target standard mt_standard imu_communication_test gimbal_response_test gimbal_test -j{{jobs}}
 
