@@ -61,6 +61,7 @@ int main(int argc, char * argv[])
 
     auto q = cboard.imu_at(t - 1ms);
     auto mode = cboard.mode_cboard;
+    auto gimbal_state = cboard.state();
 
     solver.set_R_gimbal2world(q);
 
@@ -114,6 +115,20 @@ int main(int argc, char * argv[])
       fmt::format(
         "cmd(deg): yaw:{:.2f} pitch:{:.2f}", command.yaw * 57.3, command.pitch * 57.3),
       {10, 90}, {154, 50, 205});
+
+    tools::draw_text(
+      img,
+      fmt::format(
+        "rx(deg): yaw:{:.2f} pitch:{:.2f} yaw_v:{:.2f} pitch_v:{:.2f}",
+        gimbal_state.yaw, gimbal_state.pitch, gimbal_state.yaw_vel, gimbal_state.pitch_vel),
+      {10, 120}, {255, 255, 0});
+
+    tools::draw_text(
+      img,
+      fmt::format(
+        "rx: bullet_speed:{:.2f} bullet_count:{}",
+        gimbal_state.bullet_speed, gimbal_state.bullet_count),
+      {10, 150}, {255, 255, 0});
 
     cv::imshow("auto_aim_camera_test", img);
     if (cv::waitKey(1) == 'q') break;
