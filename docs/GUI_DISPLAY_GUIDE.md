@@ -25,7 +25,7 @@ export DISPLAY=:1
 Now run GUI commands directly without the prefix:
 
 ```bash
-./build/camera_test
+just test camera -d
 python3 camera_viewer.py
 zenity --info --text="Test"
 ```
@@ -47,7 +47,7 @@ DISPLAY=:1 eog image.jpg
 DISPLAY=:1 python3 camera_viewer.py
 
 # Run any OpenCV application
-DISPLAY=:1 ./build/camera_test
+DISPLAY=:1 just test camera -d
 ```
 
 ### In Python Code
@@ -84,7 +84,7 @@ int main() {
 export DISPLAY=:1
 
 # All GUI commands below will use physical monitor
-./camera_test
+just test camera -d
 python3 viewer.py
 ```
 

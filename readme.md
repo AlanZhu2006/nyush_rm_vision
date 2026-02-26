@@ -75,13 +75,7 @@ IMU型号：使用C板内置BMI088作为IMU\
         screen
     ```
 
-2. 编译：
-    ```bash
-    cmake -G "Unix Makefiles" -B build
-    make -C build/ -j`nproc`
-    ```
-
-2.1 使用 `just` 封装常用命令（推荐）
+2. 编译（推荐 `just`）：
     注：建议使用默认参数或位置参数，不要用 `key=value` 形式传参。
     ```bash
     # 查看可用命令
@@ -90,20 +84,30 @@ IMU型号：使用C板内置BMI088作为IMU\
     # 配置（自动尝试历史 OpenVINO 路径）
     just cmake
 
-    # 编译
+    # 编译（仅构建）
     just make
 
     # 一步完成“首次配置 + 编译”
     just build
 
-    # 只编译核心目标
-    just make-core
+    # 强制重配后编译（清理缓存后再构建）
+    just rebuild
 
-    # 运行主程序（多线程入口，默认 configs/standard3.yaml）
-    just run-mt
+    # 运行主程序（多线程入口，默认 configs/odin.yaml）
+    just run mt
 
     # 指定配置文件
-    just run-mt configs/standard3.yaml
+    just run mt configs/odin.yaml
+
+    # 常用测试入口
+    just test imu
+    just test camera -d
+    just test detect --send
+
+    # 标定流程入口
+    just calibrate capture --cli-mode
+    just calibrate camera --input-folder=assets/img_with_q
+    just calibrate handeye --input-folder=assets/img_with_q
     ```
 
 3. 运行demo:

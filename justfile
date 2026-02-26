@@ -6,6 +6,8 @@ default:
 default_build_dir := "build"
 default_cmake_generator := "Unix Makefiles"
 default_config := "configs/odin.yaml"
+default_calib_config := "configs/calibration.yaml"
+default_calib_folder := "assets/img_with_q"
 default_jobs := "4"
 default_profile := "Release"
 default_use_tensorrt := "OFF"
@@ -123,6 +125,90 @@ run-help:
   @echo "  just run mt configs/odin.yaml"
   @echo "  just run response-yaw configs/odin.yaml --amp=4 --signal=step"
   @echo "  just run response-pitch --signal=triangle_wave"
+
+# Unified calibration launcher. See `just calibrate-help` for detailed usage.
+calibrate name="capture" arg="" arg2="" arg3="" arg4="" arg5="" arg6="" build_dir=default_build_dir config=default_calib_config input_folder=default_calib_folder output_folder=default_calib_folder:
+  @cfg="{{config}}"; in_folder="{{input_folder}}"; out_folder="{{output_folder}}"; cli_mode="false"; in_path=""; out_path=""; start=""; end=""; \
+  for token in "{{arg}}" "{{arg2}}" "{{arg3}}" "{{arg4}}" "{{arg5}}" "{{arg6}}"; do \
+    if [[ -z "${token}" ]]; then \
+      continue; \
+    elif [[ "${token}" == --config=* ]]; then \
+      cfg="${token#--config=}"; \
+    elif [[ "${token}" == --input-folder=* ]]; then \
+      in_folder="${token#--input-folder=}"; \
+    elif [[ "${token}" == --output-folder=* ]]; then \
+      out_folder="${token#--output-folder=}"; \
+    elif [[ "${token}" == --input-path=* ]]; then \
+      in_path="${token#--input-path=}"; \
+    elif [[ "${token}" == --output-path=* ]]; then \
+      out_path="${token#--output-path=}"; \
+    elif [[ "${token}" == --start=* ]]; then \
+      start="${token#--start=}"; \
+    elif [[ "${token}" == --end=* ]]; then \
+      end="${token#--end=}"; \
+    elif [[ "${token}" == --cli-mode ]]; then \
+      cli_mode="true"; \
+    fi; \
+  done; \
+  case "{{name}}" in \
+    capture) \
+      if [[ "${cli_mode}" == "true" ]]; then \
+        ./{{build_dir}}/capture "${cfg}" --output-folder="${out_folder}" --cli-mode; \
+      else \
+        ./{{build_dir}}/capture "${cfg}" --output-folder="${out_folder}"; \
+      fi ;; \
+    camera) ./{{build_dir}}/calibrate_camera "${in_folder}" --config-path="${cfg}" ;; \
+    handeye) ./{{build_dir}}/calibrate_handeye "${in_folder}" --config-path="${cfg}" ;; \
+    robotworld-handeye|rwhandeye) ./{{build_dir}}/calibrate_robotworld_handeye "${in_folder}" --config-path="${cfg}" ;; \
+    split-video) \
+      if [[ -z "${in_path}" ]]; then \
+        echo "[calibrate] split-video requires --input-path=<path>" >&2; \
+        exit 1; \
+      fi; \
+      if [[ -z "${out_path}" ]]; then \
+        out_path="${in_path}_split"; \
+      fi; \
+      if [[ -n "${start}" && -n "${end}" ]]; then \
+        ./{{build_dir}}/split_video "${in_path}" --output-path="${out_path}" --start-index="${start}" --end-index="${end}"; \
+      elif [[ -n "${start}" ]]; then \
+        ./{{build_dir}}/split_video "${in_path}" --output-path="${out_path}" --start-index="${start}"; \
+      elif [[ -n "${end}" ]]; then \
+        ./{{build_dir}}/split_video "${in_path}" --output-path="${out_path}" --end-index="${end}"; \
+      else \
+        ./{{build_dir}}/split_video "${in_path}" --output-path="${out_path}"; \
+      fi ;; \
+    *) echo "[calibrate] Unknown target '{{name}}'. Supported: capture, camera, handeye, robotworld-handeye, split-video. See: just calibrate-help" >&2; exit 1 ;; \
+  esac
+
+# Print detailed help for unified calibration launcher.
+calibrate-help:
+  @echo "just calibrate <name> [flags]"
+  @echo ""
+  @echo "Available calibration names:"
+  @echo "  capture            - Capture images + IMU quaternion files"
+  @echo "  camera             - Calibrate camera intrinsics from captured images"
+  @echo "  handeye            - Calibrate camera-to-gimbal extrinsics"
+  @echo "  robotworld-handeye - Joint robot-world/hand-eye calibration"
+  @echo "  split-video        - Split a recorded .avi/.txt by frame range"
+  @echo ""
+  @echo "Common flags:"
+  @echo "  --config=<path>          calibration yaml (default: configs/calibration.yaml)"
+  @echo "  --input-folder=<path>    image folder (default: assets/img_with_q)"
+  @echo "  --output-folder=<path>   output folder for capture"
+  @echo "  --cli-mode               capture: press s/q in terminal"
+  @echo ""
+  @echo "split-video flags:"
+  @echo "  --input-path=<path>      required, base path without .avi/.txt suffix"
+  @echo "  --output-path=<path>     optional, default: <input-path>_split"
+  @echo "  --start=<index>          optional start frame index"
+  @echo "  --end=<index>            optional end frame index"
+  @echo ""
+  @echo "Examples:"
+  @echo "  just calibrate capture --cli-mode"
+  @echo "  just calibrate camera --input-folder=assets/img_with_q"
+  @echo "  just calibrate handeye --input-folder=assets/img_with_q"
+  @echo "  just calibrate robotworld-handeye --input-folder=assets/img_with_q"
+  @echo "  just calibrate split-video --input-path=records/demo/run1 --start=300 --end=900"
 
 # Unified test launcher. See `just test-help` for detailed usage.
 test name="imu" arg="" arg2="" arg3="" arg4="" config=default_config build_dir=default_build_dir:
