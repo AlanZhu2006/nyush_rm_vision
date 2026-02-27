@@ -53,9 +53,39 @@ make target="" build_dir=default_build_dir jobs=default_jobs:
     command cmake --build {{build_dir}} -j{{jobs}}; \
   fi
 
-# One-step configure + build (always runs cmake first).
+# Configure only when build tree is missing/invalid.
+ensure-configured build_dir=default_build_dir profile=default_profile use_tensorrt=default_use_tensorrt openvino_dir=default_openvino_dir:
+  @need_configure="false"; \
+  reason=""; \
+  if [[ ! -f "{{build_dir}}/CMakeCache.txt" ]]; then \
+    need_configure="true"; \
+    reason="missing CMakeCache.txt"; \
+  elif [[ ! -f "{{build_dir}}/Makefile" ]]; then \
+    need_configure="true"; \
+    reason="missing Makefile (likely stale non-Makefiles build tree)"; \
+  else \
+    generator=""; \
+    while IFS= read -r line; do \
+      if [[ "${line}" == CMAKE_GENERATOR:INTERNAL=* ]]; then \
+        generator="${line#CMAKE_GENERATOR:INTERNAL=}"; \
+        break; \
+      fi; \
+    done < "{{build_dir}}/CMakeCache.txt"; \
+    if [[ -n "${generator}" && "${generator}" != "{{default_cmake_generator}}" ]]; then \
+      need_configure="true"; \
+      reason="generator mismatch: ${generator}"; \
+    fi; \
+  fi; \
+  if [[ "${need_configure}" == "true" ]]; then \
+    echo "[ensure-configured] ${reason}, running cmake..."; \
+    just cmake "{{build_dir}}" "{{profile}}" "{{use_tensorrt}}" "{{openvino_dir}}"; \
+  else \
+    echo "[ensure-configured] build tree is valid, skip cmake"; \
+  fi
+
+# One-step build (cmake only when build tree is missing/invalid).
 build target="" build_dir=default_build_dir profile=default_profile use_tensorrt=default_use_tensorrt openvino_dir=default_openvino_dir jobs=default_jobs:
-  just cmake "{{build_dir}}" "{{profile}}" "{{use_tensorrt}}" "{{openvino_dir}}"
+  just ensure-configured "{{build_dir}}" "{{profile}}" "{{use_tensorrt}}" "{{openvino_dir}}"
   @if [[ -n "{{target}}" ]]; then \
     command cmake --build {{build_dir}} --target {{target}} -j{{jobs}}; \
   else \
@@ -211,8 +241,8 @@ calibrate-help:
   @echo "  just calibrate split-video --input-path=records/demo/run1 --start=300 --end=900"
 
 # Unified test launcher. See `just test-help` for detailed usage.
-test name="imu" arg="" arg2="" arg3="" arg4="" config=default_config build_dir=default_build_dir:
-  @cfg="{{config}}"; display="false"; send="false"; fire="false"; gimbal_opts=""; local_display=""; local_xauth=""; \
+test name="imu" arg="" arg2="" arg3="" arg4="" config=default_config build_dir=default_build_dir jobs=default_jobs:
+  @cfg="{{config}}"; display="false"; send="false"; fire="false"; gimbal_opts=""; local_display=""; local_xauth=""; test_target=""; \
   for token in "{{arg}}" "{{arg2}}" "{{arg3}}" "{{arg4}}"; do \
     if [[ -z "${token}" ]]; then \
       continue; \
@@ -243,6 +273,15 @@ test name="imu" arg="" arg2="" arg3="" arg4="" config=default_config build_dir=d
   if [[ -n "${local_display}" && -z "${local_xauth}" ]]; then \
     local_xauth="${HOME}/.Xauthority"; \
   fi; \
+  just ensure-configured "{{build_dir}}" "{{default_profile}}" "{{default_use_tensorrt}}" "{{default_openvino_dir}}"; \
+  case "{{name}}" in \
+    imu) test_target="imu_communication_test" ;; \
+    camera) test_target="camera_test" ;; \
+    detect) test_target="auto_aim_camera_test" ;; \
+    gimbal) test_target="gimbal_test" ;; \
+    *) echo "[test] Unknown test '{{name}}'. Supported: imu, camera, detect, gimbal. See: just test-help" >&2; exit 1 ;; \
+  esac; \
+  command cmake --build {{build_dir}} --target "${test_target}" -j{{jobs}}; \
   run_with_display() { \
     if [[ -n "${local_display}" ]]; then \
       if [[ -n "${local_xauth}" ]]; then \
@@ -259,7 +298,6 @@ test name="imu" arg="" arg2="" arg3="" arg4="" config=default_config build_dir=d
     camera) if [[ "${display}" == "true" ]]; then run_with_display ./{{build_dir}}/camera_test "${cfg}" -d; else run_with_display ./{{build_dir}}/camera_test "${cfg}"; fi ;; \
     detect) if [[ "${send}" == "true" ]]; then run_with_display ./{{build_dir}}/auto_aim_camera_test "${cfg}" --send; else run_with_display ./{{build_dir}}/auto_aim_camera_test "${cfg}"; fi ;; \
     gimbal) if [[ "${fire}" == "true" ]]; then run_with_display ./{{build_dir}}/gimbal_test -f "${cfg}" ${gimbal_opts}; else run_with_display ./{{build_dir}}/gimbal_test "${cfg}" ${gimbal_opts}; fi ;; \
-    *) echo "[test] Unknown test '{{name}}'. Supported: imu, camera, detect, gimbal. See: just test-help" >&2; exit 1 ;; \
   esac
 
 # Print detailed help for unified test launcher.

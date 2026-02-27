@@ -2,6 +2,7 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include <cmath>
 #include <tuple>
 
 #include "tools/logger.hpp"
@@ -9,10 +10,32 @@
 
 namespace auto_aim
 {
+namespace
+{
+double center_distance_score(const Armor & armor, int image_width, int image_height)
+{
+  if (image_width > 0 && image_height > 0) {
+    cv::Point2f img_center(image_width * 0.5f, image_height * 0.5f);
+    return cv::norm(armor.center - img_center);
+  }
+
+  if (
+    std::isfinite(armor.center_norm.x) && std::isfinite(armor.center_norm.y) &&
+    armor.center_norm.x >= 0.0f && armor.center_norm.x <= 1.0f && armor.center_norm.y >= 0.0f &&
+    armor.center_norm.y <= 1.0f) {
+    return std::hypot(armor.center_norm.x - 0.5f, armor.center_norm.y - 0.5f);
+  }
+
+  return std::hypot(armor.center.x, armor.center.y);
+}
+}  // namespace
+
 Tracker::Tracker(const std::string & config_path, Solver & solver)
 : solver_{solver},
   detect_count_(0),
   temp_lost_count_(0),
+  image_width_(0),
+  image_height_(0),
   state_{"lost"},
   pre_state_{"lost"},
   last_timestamp_(std::chrono::steady_clock::now()),
@@ -23,6 +46,8 @@ Tracker::Tracker(const std::string & config_path, Solver & solver)
   min_detect_count_ = yaml["min_detect_count"].as<int>();
   max_temp_lost_count_ = yaml["max_temp_lost_count"].as<int>();
   outpost_max_temp_lost_count_ = yaml["outpost_max_temp_lost_count"].as<int>();
+  if (yaml["image_width"]) image_width_ = yaml["image_width"].as<int>();
+  if (yaml["image_height"]) image_height_ = yaml["image_height"].as<int>();
   normal_temp_lost_count_ = max_temp_lost_count_;
 }
 
@@ -50,10 +75,9 @@ std::list<Target> Tracker::track(
   // });
 
   // 优先选择靠近图像中心的装甲板
-  armors.sort([](const Armor & a, const Armor & b) {
-    cv::Point2f img_center(1440 / 2, 1080 / 2);  // TODO
-    auto distance_1 = cv::norm(a.center - img_center);
-    auto distance_2 = cv::norm(b.center - img_center);
+  armors.sort([this](const Armor & a, const Armor & b) {
+    auto distance_1 = center_distance_score(a, image_width_, image_height_);
+    auto distance_2 = center_distance_score(b, image_width_, image_height_);
     return distance_1 < distance_2;
   });
 
@@ -115,10 +139,9 @@ std::tuple<omniperception::DetectionResult, std::list<Target>> Tracker::track(
   }
 
   // 优先选择靠近图像中心的装甲板
-  armors.sort([](const Armor & a, const Armor & b) {
-    cv::Point2f img_center(1440 / 2, 1080 / 2);  // TODO
-    auto distance_1 = cv::norm(a.center - img_center);
-    auto distance_2 = cv::norm(b.center - img_center);
+  armors.sort([this](const Armor & a, const Armor & b) {
+    auto distance_1 = center_distance_score(a, image_width_, image_height_);
+    auto distance_2 = center_distance_score(b, image_width_, image_height_);
     return distance_1 < distance_2;
   });
 

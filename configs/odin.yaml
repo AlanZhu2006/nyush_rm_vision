@@ -23,7 +23,7 @@ use_roi: false
 
 #####-----USB相机参数-----#####
 image_width: 1280
-image_height: 720
+image_height: 1024
 fov_h: 57.7 #87.7
 fov_v: 56.7 
 new_fov_h: 27 #67
@@ -56,12 +56,12 @@ max_temp_lost_count: 25
 outpost_max_temp_lost_count: 75
 
 #####-----aimer参数-----#####
-yaw_offset: -0.8 # degree -2.5
-pitch_offset: -1  # degree 2
+yaw_offset: 0 # degree
+pitch_offset: 0  # degree
 comming_angle: 60 # degree
 leaving_angle: 20 # degree
-left_yaw_offset: -1
-right_yaw_offset: -0.6
+left_yaw_offset: 0
+right_yaw_offset: 0
 decision_speed: 10 # rad/s
 high_speed_delay_time: 0.026 # s
 low_speed_delay_time: 0.010 # s
