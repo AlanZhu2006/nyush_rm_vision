@@ -81,13 +81,14 @@ int main(int argc, char * argv[])
     auto now = std::chrono::steady_clock::now();
     auto dt = tools::delta_time(now, last_stamp);
     last_stamp = now;
+    auto fps = dt > 1e-6 ? 1.0 / dt : 0.0;
 
     frame_count++;
     if (mode == io::Mode::auto_aim && frame_count % log_interval == 0) {
       tools::logger()->info(
         "tx:{} cmd: control={} yaw={:.2f} pitch={:.2f} shoot={} | fps {:.2f}",
         send_to_gimbal, command.control, command.yaw * 57.3, command.pitch * 57.3,
-        command.shoot, 1.0 / dt);
+        command.shoot, fps);
     }
 
     for (const auto & armor : armors) {
@@ -100,35 +101,29 @@ int main(int argc, char * argv[])
     tools::draw_text(
       img,
       fmt::format(
-        "mode:{} armors:{} tx:{}", io::MODES[mode], armors.size(), send_to_gimbal),
+        "mode:{} armors:{} tx:{} fps:{:.2f}", io::MODES[mode], armors.size(), send_to_gimbal, fps),
       {10, 30}, {255, 255, 255});
 
     tools::draw_text(
       img,
       fmt::format(
-        "cmd(rad): ctl:{} yaw:{:.4f} pitch:{:.4f} shoot:{}",
-        command.control, command.yaw, command.pitch, command.shoot),
+        "tx(rad): tx:{} ctl:{} yaw:{:.4f} pitch:{:.4f} shoot:{}",
+        send_to_gimbal, command.control, command.yaw, command.pitch, command.shoot),
       {10, 60}, {154, 50, 205});
 
     tools::draw_text(
       img,
       fmt::format(
-        "cmd(deg): yaw:{:.2f} pitch:{:.2f}", command.yaw * 57.3, command.pitch * 57.3),
-      {10, 90}, {154, 50, 205});
-
-    tools::draw_text(
-      img,
-      fmt::format(
-        "rx(deg): yaw:{:.2f} pitch:{:.2f} yaw_v:{:.2f} pitch_v:{:.2f}",
+        "rx(rad): yaw:{:.2f} pitch:{:.2f} yaw_v:{:.2f} pitch_v:{:.2f}",
         gimbal_state.yaw, gimbal_state.pitch, gimbal_state.yaw_vel, gimbal_state.pitch_vel),
-      {10, 120}, {255, 255, 0});
+      {10, 90}, {255, 255, 0});
 
     tools::draw_text(
       img,
       fmt::format(
         "rx: bullet_speed:{:.2f} bullet_count:{}",
         gimbal_state.bullet_speed, gimbal_state.bullet_count),
-      {10, 150}, {255, 255, 0});
+      {10, 120}, {255, 255, 0});
 
     cv::imshow("auto_aim_camera_test", img);
     if (cv::waitKey(1) == 'q') break;
