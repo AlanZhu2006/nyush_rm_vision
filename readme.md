@@ -103,11 +103,17 @@ IMU型号：使用C板内置BMI088作为IMU\
     just test imu
     just test camera -d
     just test detect --send
+    just test gimbal --fire
 
     # 标定流程入口
     just calibrate capture --cli-mode
     just calibrate camera --input-folder=assets/img_with_q
     just calibrate handeye --input-folder=assets/img_with_q
+
+    # 查看分组帮助
+    just run-help
+    just test-help
+    just calibrate-help
     ```
 
 3. 运行demo:
