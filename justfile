@@ -212,7 +212,7 @@ calibrate-help:
 
 # Unified test launcher. See `just test-help` for detailed usage.
 test name="imu" arg="" arg2="" arg3="" arg4="" config=default_config build_dir=default_build_dir:
-  @cfg="{{config}}"; display="false"; send="false"; fire="false"; \
+  @cfg="{{config}}"; display="false"; send="false"; fire="false"; gimbal_opts=""; local_display=""; local_xauth=""; \
   for token in "{{arg}}" "{{arg2}}" "{{arg3}}" "{{arg4}}"; do \
     if [[ -z "${token}" ]]; then \
       continue; \
@@ -224,15 +224,41 @@ test name="imu" arg="" arg2="" arg3="" arg4="" config=default_config build_dir=d
       fire="true"; \
     elif [[ "${token}" == "--no-send" ]]; then \
       send="false"; \
+    elif [[ "${token}" == "--local-display" ]]; then \
+      local_display=":0"; \
+    elif [[ "${token}" == --local-display=* ]]; then \
+      local_display="${token#--local-display=}"; \
+    elif [[ "${token}" == --xauthority=* ]]; then \
+      local_xauth="${token#--xauthority=}"; \
+    elif [[ "${token}" =~ ^:[0-9]+$ ]]; then \
+      local_display="${token}"; \
+    elif [[ "${token}" =~ ^[0-9]+$ ]]; then \
+      local_display=":${token}"; \
+    elif [[ "${token}" == "-v" || "${token}" == "--verbose" || "${token}" == --distance=* || "${token}" == --radius=* || "${token}" == --height=* || "${token}" == --height-amp=* || "${token}" == --omega=* || "${token}" == --hz=* ]]; then \
+      gimbal_opts="${gimbal_opts} ${token}"; \
     else \
       cfg="${token}"; \
     fi; \
   done; \
+  if [[ -n "${local_display}" && -z "${local_xauth}" ]]; then \
+    local_xauth="${HOME}/.Xauthority"; \
+  fi; \
+  run_with_display() { \
+    if [[ -n "${local_display}" ]]; then \
+      if [[ -n "${local_xauth}" ]]; then \
+        env DISPLAY="${local_display}" XAUTHORITY="${local_xauth}" "$@"; \
+      else \
+        env DISPLAY="${local_display}" "$@"; \
+      fi; \
+    else \
+      "$@"; \
+    fi; \
+  }; \
   case "{{name}}" in \
-    imu) ./{{build_dir}}/imu_communication_test "${cfg}" ;; \
-    camera) if [[ "${display}" == "true" ]]; then ./{{build_dir}}/camera_test "${cfg}" -d; else ./{{build_dir}}/camera_test "${cfg}"; fi ;; \
-    detect) if [[ "${send}" == "true" ]]; then ./{{build_dir}}/auto_aim_camera_test "${cfg}" --send; else ./{{build_dir}}/auto_aim_camera_test "${cfg}"; fi ;; \
-    gimbal) if [[ "${fire}" == "true" ]]; then ./{{build_dir}}/gimbal_test -f "${cfg}"; else ./{{build_dir}}/gimbal_test "${cfg}"; fi ;; \
+    imu) run_with_display ./{{build_dir}}/imu_communication_test "${cfg}" ;; \
+    camera) if [[ "${display}" == "true" ]]; then run_with_display ./{{build_dir}}/camera_test "${cfg}" -d; else run_with_display ./{{build_dir}}/camera_test "${cfg}"; fi ;; \
+    detect) if [[ "${send}" == "true" ]]; then run_with_display ./{{build_dir}}/auto_aim_camera_test "${cfg}" --send; else run_with_display ./{{build_dir}}/auto_aim_camera_test "${cfg}"; fi ;; \
+    gimbal) if [[ "${fire}" == "true" ]]; then run_with_display ./{{build_dir}}/gimbal_test -f "${cfg}" ${gimbal_opts}; else run_with_display ./{{build_dir}}/gimbal_test "${cfg}" ${gimbal_opts}; fi ;; \
     *) echo "[test] Unknown test '{{name}}'. Supported: imu, camera, detect, gimbal. See: just test-help" >&2; exit 1 ;; \
   esac
 
@@ -244,16 +270,32 @@ test-help:
   @echo "  imu     - IMU communication link test (read + periodic command send)"
   @echo "  camera  - Industrial camera stream test"
   @echo "  detect  - GUI detect/track test with command overlay"
-  @echo "  gimbal  - Fixed command gimbal send test"
+  @echo "  gimbal  - Vision-like target simulation and protocol send test"
   @echo ""
   @echo "Flags:"
   @echo "  -d, --display    camera: show GUI window"
   @echo "  -s, --send       detect: send command to lower machine"
   @echo "  --no-send        detect: disable send (default)"
   @echo "  -f, --fire       gimbal: enable fire pulse"
+  @echo "  --distance=..    gimbal: target center distance in meters"
+  @echo "  --radius=..      gimbal: horizontal motion radius in meters"
+  @echo "  --height=..      gimbal: target center height in meters"
+  @echo "  --height-amp=..  gimbal: height oscillation amplitude in meters"
+  @echo "  --omega=..       gimbal: angular speed in rad/s"
+  @echo "  --hz=..          gimbal: send frequency in Hz"
+  @echo "  -v, --verbose    gimbal: enable periodic TX/RX logs"
+  @echo "  --local-display[=:N] force GUI to physical X display (default :0)"
+  @echo "  :N or N          shorthand display selector, e.g. '-d 0' => DISPLAY=:0"
+  @echo "  --xauthority=..      Xauthority path for --local-display (default: $HOME/.Xauthority)"
+  @echo "  (interactive)    gimbal: aim <yaw_deg> [pitch_deg], sim on/off, send on/off"
   @echo ""
   @echo "Examples:"
   @echo "  just test imu"
   @echo "  just test camera -d"
+  @echo "  just test camera -d 0"
+  @echo "  just test camera -d --local-display"
+  @echo "  just test detect --local-display=:0 --xauthority=/home/nyu/.Xauthority"
   @echo "  just test detect configs/odin.yaml --send"
   @echo "  just test gimbal --fire"
+  @echo "  just test gimbal --distance=4 --radius=0.8 --omega=1.5 --hz=120"
+  @echo "  just test gimbal --verbose"
