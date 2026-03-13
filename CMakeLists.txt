@@ -2,6 +2,10 @@ cmake_minimum_required(VERSION 3.16.3)
 
 project(sp_vision)
 
+if(CMAKE_GENERATOR MATCHES "Ninja")
+    message(FATAL_ERROR "Ninja generator is disabled for this project. Please configure with -G \"Unix Makefiles\".")
+endif()
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_BUILD_TYPE Release)
 message(STATUS "--------------------CMAKE_BUILD_TYPE: ${CMAKE_BUILD_TYPE}--------------------")
@@ -13,6 +17,51 @@ find_package(spdlog REQUIRED)
 find_package(yaml-cpp REQUIRED)
 find_package(nlohmann_json REQUIRED)
 find_package(OpenVINO REQUIRED)
+
+option(USE_TENSORRT "Enable TensorRT backend" OFF)
+
+if(USE_TENSORRT)
+    find_path(TENSORRT_INCLUDE_DIR NvInfer.h
+        HINTS
+        /usr/include
+        /usr/include/x86_64-linux-gnu
+        /usr/include/aarch64-linux-gnu)
+    find_library(TENSORRT_LIB nvinfer
+        HINTS
+        /usr/lib
+        /usr/lib/x86_64-linux-gnu
+        /usr/lib/aarch64-linux-gnu
+        /usr/lib/wsl/lib)
+    find_library(TENSORRT_PLUGIN_LIB nvinfer_plugin
+        HINTS
+        /usr/lib
+        /usr/lib/x86_64-linux-gnu
+        /usr/lib/aarch64-linux-gnu
+        /usr/lib/wsl/lib)
+    find_library(CUDA_RT_LIB cudart
+        HINTS
+        /usr/local/cuda/lib64
+        /usr/lib
+        /usr/lib/x86_64-linux-gnu
+        /usr/lib/aarch64-linux-gnu
+        /usr/lib/wsl/lib)
+
+    find_path(CUDA_INCLUDE_DIR cuda_runtime_api.h
+        HINTS
+        /usr/local/cuda/include
+        /usr/include
+        /usr/include/aarch64-linux-gnu
+        /usr/include/x86_64-linux-gnu)
+
+    if(NOT TENSORRT_INCLUDE_DIR OR NOT TENSORRT_LIB OR NOT TENSORRT_PLUGIN_LIB OR NOT CUDA_RT_LIB OR NOT CUDA_INCLUDE_DIR)
+        message(FATAL_ERROR "TensorRT libraries not found. Set TENSORRT paths or disable USE_TENSORRT.")
+    endif()
+
+    add_library(tensorrt INTERFACE)
+    target_include_directories(tensorrt INTERFACE ${TENSORRT_INCLUDE_DIR} ${CUDA_INCLUDE_DIR})
+    target_link_libraries(tensorrt INTERFACE ${TENSORRT_LIB} ${TENSORRT_PLUGIN_LIB} ${CUDA_RT_LIB})
+    target_compile_definitions(tensorrt INTERFACE USE_TENSORRT)
+endif()
 
 include_directories(${EIGEN3_INCLUDE_DIR})
 include_directories(${OpenCV_INCLUDE_DIRS})
@@ -61,6 +110,7 @@ target_link_libraries(split_video ${OpenCV_LIBS} fmt::fmt tools)
 
 ##################tests##################
 add_executable(auto_aim_test tests/auto_aim_test.cpp)
+add_executable(auto_aim_camera_test tests/auto_aim_camera_test.cpp)
 add_executable(auto_buff_test tests/auto_buff_test.cpp)
 add_executable(camera_detect_test tests/camera_detect_test.cpp)
 add_executable(camera_test tests/camera_test.cpp)
@@ -77,6 +127,7 @@ add_executable(dm_test tests/dm_test.cpp)
 add_executable(minimum_vision_system tests/minimum_vision_system.cpp)
 
 target_link_libraries(auto_aim_test ${OpenCV_LIBS} fmt::fmt yaml-cpp tools io auto_aim)
+target_link_libraries(auto_aim_camera_test ${OpenCV_LIBS} fmt::fmt yaml-cpp tools io auto_aim)
 target_link_libraries(auto_buff_test ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_buff tools io)
 target_link_libraries(camera_detect_test ${OpenCV_LIBS} fmt::fmt yaml-cpp tools auto_aim io)
 target_link_libraries(camera_test ${OpenCV_LIBS} fmt::fmt tools io)
@@ -94,6 +145,9 @@ target_link_libraries(minimum_vision_system ${OpenCV_LIBS} fmt::fmt yaml-cpp too
 
 add_executable(gimbal_test tests/gimbal_test.cpp)
 target_link_libraries(gimbal_test ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools io)
+
+add_executable(imu_communication_test tests/imu_communication_test.cpp)
+target_link_libraries(imu_communication_test ${OpenCV_LIBS} fmt::fmt yaml-cpp tools io)
 
 add_executable(planner_test tests/planner_test.cpp)
 target_link_libraries(planner_test ${OpenCV_LIBS} fmt::fmt yaml-cpp auto_aim tools io)

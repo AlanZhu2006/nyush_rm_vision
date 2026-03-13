@@ -4,6 +4,7 @@
 
 #include "io/camera.hpp"
 #include "io/dm_imu/dm_imu.hpp"
+#include "io/gimbal/gimbal.hpp"
 #include "tasks/auto_aim/aimer.hpp"
 #include "tasks/auto_aim/detector.hpp"
 #include "tasks/auto_aim/shooter.hpp"
@@ -37,7 +38,7 @@ int main(int argc, char * argv[])
   tools::Recorder recorder;
 
   io::Camera camera(config_path);
-  io::CBoard cboard(config_path);
+  io::Gimbal cboard(config_path);
 
   auto_aim::Detector detector(config_path);
   auto_aim::Solver solver(config_path);
@@ -58,7 +59,7 @@ int main(int argc, char * argv[])
   while (!exiter.exit()) {
     camera.read(img, t);
     q = cboard.imu_at(t - 1ms);
-    mode = cboard.mode;
+    mode = cboard.mode_cboard;
     // recorder.record(img, q, t);
     if (last_mode != mode) {
       tools::logger()->info("Switch to {}", io::MODES[mode]);

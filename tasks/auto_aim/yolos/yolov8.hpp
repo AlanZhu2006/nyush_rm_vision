@@ -2,8 +2,12 @@
 #define AUTO_AIM__YOLOV8_HPP
 
 #include <list>
+#include <memory>
 #include <opencv2/opencv.hpp>
 #include <openvino/openvino.hpp>
+#ifdef USE_TENSORRT
+#include "tools/tensorrt_engine.hpp"
+#endif
 #include <string>
 #include <vector>
 
@@ -29,7 +33,7 @@ private:
   Classifier classifier_;
   Detector detector_;
 
-  std::string device_, model_path_;
+  std::string device_, model_path_, backend_;
   std::string save_path_, debug_path_;
   bool debug_, use_roi_;
 
@@ -40,6 +44,9 @@ private:
 
   ov::Core core_;
   ov::CompiledModel compiled_model_;
+#ifdef USE_TENSORRT
+  std::unique_ptr<tools::TrtEngine> trt_engine_;
+#endif
 
   cv::Rect roi_;
   cv::Point2f offset_;

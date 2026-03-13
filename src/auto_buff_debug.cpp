@@ -3,7 +3,7 @@
 #include <string>
 
 #include "io/camera.hpp"
-#include "io/cboard.hpp"
+#include "io/gimbal/gimbal.hpp"
 #include "tasks/auto_buff/buff_aimer.hpp"
 #include "tasks/auto_buff/buff_detector.hpp"
 #include "tasks/auto_buff/buff_solver.hpp"
@@ -38,7 +38,7 @@ int main(int argc, char * argv[])
   tools::Exiter exiter;
 
   // 初始化C板、相机
-  io::CBoard cboard(config_path);
+  io::Gimbal cboard(config_path);
   io::Camera camera(config_path);
 
   // 初始化识别器、解算器、追踪器、瞄准器

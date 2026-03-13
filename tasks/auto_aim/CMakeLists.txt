@@ -24,3 +24,7 @@ add_library(auto_aim OBJECT
 )
 
 target_link_libraries(auto_aim io openvino::runtime tinympcstatic)
+
+if(USE_TENSORRT)
+    target_link_libraries(auto_aim tensorrt)
+endif()

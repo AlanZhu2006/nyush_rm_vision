@@ -38,6 +38,8 @@ private:
   int temp_lost_count_;
   int outpost_max_temp_lost_count_;
   int normal_temp_lost_count_;
+  int image_width_;
+  int image_height_;
   std::string state_, pre_state_;
   Target target_;
   std::chrono::steady_clock::time_point last_timestamp_;

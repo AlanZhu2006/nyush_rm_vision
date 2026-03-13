@@ -9,11 +9,14 @@
 #include <thread>
 #include <tuple>
 
+#include "io/command.hpp"
+#include "io/mode.hpp"
 #include "serial/serial.h"
 #include "tools/thread_safe_queue.hpp"
 
 namespace io
 {
+
 struct __attribute__((packed)) GimbalToVision
 {
   uint8_t head[2] = {'S', 'P'};
@@ -70,6 +73,7 @@ public:
 
   ~Gimbal();
 
+  // 原有接口
   GimbalMode mode() const;
   GimbalState state() const;
   std::string str(GimbalMode mode) const;
@@ -80,6 +84,25 @@ public:
     float pitch_acc);
 
   void send(io::VisionToGimbal VisionToGimbal);
+
+  // ===== CBoard兼容接口（新增）=====
+  // 用于替换CBoard，使现有代码无需大量修改
+
+  // CBoard风格的IMU获取接口（等价于q()）
+  Eigen::Quaterniond imu_at(std::chrono::steady_clock::time_point timestamp) {
+    return q(timestamp);
+  }
+
+  // CBoard风格的命令发送接口
+  void send(const Command & command) {
+    send(command.control, command.shoot,
+         command.yaw, 0, 0,  // yaw, yaw_vel, yaw_acc
+         command.pitch, 0, 0);  // pitch, pitch_vel, pitch_acc
+  }
+
+  // 公共成员变量（CBoard兼容）
+  double bullet_speed = 0.0;  // 实时更新
+  Mode mode_cboard = idle;     // CBoard风格的mode
 
 private:
   serial::Serial serial_;

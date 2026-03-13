@@ -21,15 +21,23 @@ int main(int argc, char * argv[])
 
   tools::Exiter exiter;
 
-  auto config_path = cli.get<std::string>("config-path");
+  auto config_path = (argc > 1 && argv[1][0] != '-') ? argv[1] : cli.get<std::string>("config-path");
   auto display = cli.has("display");
   io::Camera camera(config_path);
 
   cv::Mat img;
   std::chrono::steady_clock::time_point timestamp;
   auto last_stamp = std::chrono::steady_clock::now();
+  int last_width = -1;
+  int last_height = -1;
   while (!exiter.exit()) {
     camera.read(img, timestamp);
+
+    if (!img.empty() && (img.cols != last_width || img.rows != last_height)) {
+      last_width = img.cols;
+      last_height = img.rows;
+      tools::logger()->info("camera resolution: {}x{}", img.cols, img.rows);
+    }
 
     auto dt = tools::delta_time(timestamp, last_stamp);
     last_stamp = timestamp;

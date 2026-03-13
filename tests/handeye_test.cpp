@@ -9,7 +9,7 @@
 #include <opencv2/core/eigen.hpp>
 
 #include "io/camera.hpp"
-#include "io/cboard.hpp"
+#include "io/gimbal/gimbal.hpp"
 #include "tasks/auto_aim/solver.hpp"
 #include "tools/exiter.hpp"
 #include "tools/img_tools.hpp"
@@ -19,6 +19,8 @@ const std::string keys =
   "{help h usage ? |                     | 输出命令行参数说明}"
   "{config-path c  | configs/handeye.yaml | yaml配置文件路径 }"
   "{d display      |                     | 显示视频流       }";
+
+using namespace std::chrono_literals;
 
 // 世界坐标到像素坐标的转换
 
@@ -39,7 +41,7 @@ int main(int argc, char * argv[])
   auto grid_num = yaml["grid_num"].as<int>();
   auto grid_size = yaml["grid_size"].as<double>();
   auto delay = yaml["delay"].as<int>();
-  io::CBoard cboard(config_path);
+  io::Gimbal cboard(config_path);
   io::Camera camera(config_path);
   auto_aim::Solver solver(config_path);
 

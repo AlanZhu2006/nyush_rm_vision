@@ -5,7 +5,7 @@
 #include <opencv2/opencv.hpp>
 
 #include "io/camera.hpp"
-#include "io/cboard.hpp"
+#include "io/gimbal/gimbal.hpp"
 #include "tasks/auto_aim/aimer.hpp"
 #include "tasks/auto_aim/multithread/commandgener.hpp"
 #include "tasks/auto_aim/shooter.hpp"
@@ -38,7 +38,7 @@ int main(int argc, char * argv[])
   tools::Plotter plotter;
   tools::Recorder recorder;
 
-  io::CBoard cboard(config_path);
+  io::Gimbal cboard(config_path);
   io::Camera camera(config_path);
 
   auto_aim::YOLO detector(config_path, false);
@@ -57,7 +57,7 @@ int main(int argc, char * argv[])
   while (!exiter.exit()) {
     camera.read(img, t);
     q = cboard.imu_at(t - 1ms);
-    mode = cboard.mode;
+    mode = cboard.mode_cboard;
 
     if (last_mode != mode) {
       tools::logger()->info("Switch to {}", io::MODES[mode]);
@@ -67,8 +67,6 @@ int main(int argc, char * argv[])
     // recorder.record(img, q, t);
 
     solver.set_R_gimbal2world(q);
-
-    Eigen::Vector3d ypr = tools::eulers(solver.R_gimbal2world(), 2, 1, 0);
 
     auto armors = detector.detect(img);
 

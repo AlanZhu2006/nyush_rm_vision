@@ -75,10 +75,45 @@ IMU型号：使用C板内置BMI088作为IMU\
         screen
     ```
 
-2. 编译：
+2. 编译（推荐 `just`）：
+    注：建议使用默认参数或位置参数，不要用 `key=value` 形式传参。
     ```bash
-    cmake -B build
-    make -C build/ -j`nproc`
+    # 查看可用命令
+    just --list
+
+    # 配置（自动尝试历史 OpenVINO 路径）
+    just cmake
+
+    # 编译（仅构建）
+    just make
+
+    # 一步完成“首次配置 + 编译”
+    just build
+
+    # 强制重配后编译（清理缓存后再构建）
+    just rebuild
+
+    # 运行主程序（多线程入口，默认 configs/odin.yaml）
+    just run mt
+
+    # 指定配置文件
+    just run mt configs/odin.yaml
+
+    # 常用测试入口
+    just test imu
+    just test camera -d
+    just test detect --send
+    just test gimbal --fire
+
+    # 标定流程入口
+    just calibrate capture --cli-mode
+    just calibrate camera --input-folder=assets/img_with_q
+    just calibrate handeye --input-folder=assets/img_with_q
+
+    # 查看分组帮助
+    just run-help
+    just test-help
+    just calibrate-help
     ```
 
 3. 运行demo:

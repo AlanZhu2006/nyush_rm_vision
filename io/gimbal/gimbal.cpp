@@ -14,6 +14,8 @@ Gimbal::Gimbal(const std::string & config_path)
 
   try {
     serial_.setPort(com_port);
+    serial_.setBaudrate(115200);
+    serial_.setTimeout(serial::Timeout::max(), 1000, 0, 1000, 0);
     serial_.open();
   } catch (const std::exception & e) {
     tools::logger()->error("[Gimbal] Failed to open serial: {}", e.what());
@@ -131,6 +133,8 @@ void Gimbal::read_thread()
 {
   tools::logger()->info("[Gimbal] read_thread started.");
   int error_count = 0;
+  int packet_count = 0;
+  auto last_packet_time = std::chrono::steady_clock::now();
 
   while (!quit_) {
     if (error_count > 5000) {
@@ -162,6 +166,15 @@ void Gimbal::read_thread()
     }
 
     error_count = 0;
+    packet_count++;
+    if (packet_count % 100 == 0) {
+      auto now = std::chrono::steady_clock::now();
+      auto dt = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_packet_time).count();
+      auto freq = 100.0 / (dt / 1000.0);
+      tools::logger()->info("[Gimbal] Received {} packets, freq={:.1f}Hz", packet_count, freq);
+      last_packet_time = now;
+    }
+
     Eigen::Quaterniond q(rx_data_.q[0], rx_data_.q[1], rx_data_.q[2], rx_data_.q[3]);
     queue_.push({q, t});
 
@@ -174,21 +187,29 @@ void Gimbal::read_thread()
     state_.bullet_speed = rx_data_.bullet_speed;
     state_.bullet_count = rx_data_.bullet_count;
 
+    // 更新CBoard兼容的公共成员变量
+    bullet_speed = rx_data_.bullet_speed;
+
     switch (rx_data_.mode) {
       case 0:
         mode_ = GimbalMode::IDLE;
+        mode_cboard = idle;
         break;
       case 1:
         mode_ = GimbalMode::AUTO_AIM;
+        mode_cboard = auto_aim;
         break;
       case 2:
         mode_ = GimbalMode::SMALL_BUFF;
+        mode_cboard = small_buff;
         break;
       case 3:
         mode_ = GimbalMode::BIG_BUFF;
+        mode_cboard = big_buff;
         break;
       default:
         mode_ = GimbalMode::IDLE;
+        mode_cboard = idle;
         tools::logger()->warn("[Gimbal] Invalid mode: {}", rx_data_.mode);
         break;
     }
@@ -209,7 +230,9 @@ void Gimbal::reconnect()
     }
 
     try {
-      serial_.open();  // 尝试重新打开
+      serial_.open();
+      serial_.setBaudrate(115200);
+      serial_.setTimeout(serial::Timeout::max(), 1000, 0, 1000, 0);
       queue_.clear();
       tools::logger()->info("[Gimbal] Reconnected serial successfully.");
       break;
