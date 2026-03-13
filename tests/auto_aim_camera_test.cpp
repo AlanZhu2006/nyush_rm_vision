@@ -1,6 +1,7 @@
 #include <fmt/core.h>
 
 #include <chrono>
+#include <cstdlib>
 #include <opencv2/opencv.hpp>
 
 #include "io/camera.hpp"
@@ -20,7 +21,8 @@ const std::string keys =
   "{help h usage ? |                           | 输出命令行参数说明 }"
   "{@config-path   | configs/standard.yaml     | yaml配置文件的路径}"
   "{log-interval l | 10                        | 终端输出间隔帧数  }"
-  "{send s         |                           | 发送控制到下位机  }";
+  "{send s         |                           | 发送控制到下位机  }"
+  "{d display      |                           | 显示检测调试画面  }";
 
 int main(int argc, char * argv[])
 {
@@ -33,9 +35,15 @@ int main(int argc, char * argv[])
   auto config_path = cli.get<std::string>(0);
   auto log_interval = cli.get<int>("log-interval");
   auto send_to_gimbal = cli.has("send");
+  auto display = cli.has("display");
   if (config_path.empty()) {
     cli.printMessage();
     return 0;
+  }
+
+  if (display && std::getenv("DISPLAY") == nullptr) {
+    tools::logger()->warn("display requested but DISPLAY is unset, fallback to headless mode");
+    display = false;
   }
 
   tools::logger()->info("auto_aim_camera_test started, send={}", send_to_gimbal);
@@ -125,8 +133,15 @@ int main(int argc, char * argv[])
         gimbal_state.bullet_speed, gimbal_state.bullet_count),
       {10, 120}, {255, 255, 0});
 
-    cv::imshow("auto_aim_camera_test", img);
-    if (cv::waitKey(1) == 'q') break;
+    if (display) {
+      try {
+        cv::imshow("auto_aim_camera_test", img);
+        if (cv::waitKey(1) == 'q') break;
+      } catch (const cv::Exception & e) {
+        tools::logger()->warn("disable display due to OpenCV GUI error: {}", e.what());
+        display = false;
+      }
+    }
   }
 
   return 0;

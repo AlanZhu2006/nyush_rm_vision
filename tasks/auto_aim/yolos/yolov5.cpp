@@ -1,5 +1,6 @@
 #include "yolov5.hpp"
 
+#include <algorithm>
 #include <fmt/chrono.h>
 #include <opencv2/dnn.hpp>
 #include <yaml-cpp/yaml.h>
@@ -23,6 +24,12 @@ YOLOV5::YOLOV5(const std::string & config_path, bool debug)
   } else {
     backend_ = "openvino";
   }
+  if (backend_ != "openvino" && backend_ != "tensorrt") {
+    tools::logger()->warn("Unknown backend '{}', fallback to openvino", backend_);
+    backend_ = "openvino";
+  }
+
+  const auto ov_model_path = yaml["yolov5_model_path"].as<std::string>();
   if (backend_ == "tensorrt") {
     if (yaml["yolov5_trt_engine_path"]) {
       model_path_ = yaml["yolov5_trt_engine_path"].as<std::string>();
@@ -44,11 +51,32 @@ YOLOV5::YOLOV5(const std::string & config_path, bool debug)
   std::filesystem::create_directory(save_path_);
   if (backend_ == "tensorrt") {
 #ifdef USE_TENSORRT
-    trt_engine_ = std::make_unique<tools::TrtEngine>(model_path_, 3, 640, 640);
+    try {
+      trt_engine_ = std::make_unique<tools::TrtEngine>(model_path_, 3, 640, 640);
+      tools::logger()->info("[YOLOV5] TensorRT backend enabled: {}", model_path_);
+    } catch (const std::exception & e) {
+      tools::logger()->warn(
+        "[YOLOV5] TensorRT init failed ({}), fallback to OpenVINO model: {}", e.what(),
+        ov_model_path);
+      backend_ = "openvino";
+      model_path_ = ov_model_path;
+    }
 #else
-    throw std::runtime_error("TensorRT backend requested but USE_TENSORRT is OFF");
+    tools::logger()->warn(
+      "[YOLOV5] TensorRT backend requested but USE_TENSORRT is OFF, fallback to OpenVINO");
+    backend_ = "openvino";
+    model_path_ = ov_model_path;
 #endif
-  } else {
+  }
+
+  if (backend_ == "openvino") {
+    auto available_devices = core_.get_available_devices();
+    if (std::find(available_devices.begin(), available_devices.end(), device_) == available_devices.end()) {
+      tools::logger()->warn(
+        "[YOLOV5] OpenVINO device '{}' unavailable, fallback to CPU", device_);
+      device_ = "CPU";
+    }
+
     auto model = core_.read_model(model_path_);
     ov::preprocess::PrePostProcessor ppp(model);
     auto & input = ppp.input();

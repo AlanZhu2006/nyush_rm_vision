@@ -68,8 +68,6 @@ int main(int argc, char * argv[])
 
     solver.set_R_gimbal2world(q);
 
-    Eigen::Vector3d ypr = tools::eulers(solver.R_gimbal2world(), 2, 1, 0);
-
     auto armors = detector.detect(img);
 
     auto targets = tracker.track(armors, t);

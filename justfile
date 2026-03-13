@@ -248,6 +248,12 @@ test name="imu" arg="" arg2="" arg3="" arg4="" config=default_config build_dir=d
       continue; \
     elif [[ "${token}" == "-d" || "${token}" == "-display" || "${token}" == "--display" ]]; then \
       display="true"; \
+    elif [[ "${token}" =~ ^-d[0-9]+$ ]]; then \
+      display="true"; \
+      local_display=":${token:2}"; \
+    elif [[ "${token}" =~ ^-d:[0-9]+$ ]]; then \
+      display="true"; \
+      local_display="${token:2}"; \
     elif [[ "${token}" == "-s" || "${token}" == "--send" ]]; then \
       send="true"; \
     elif [[ "${token}" == "-f" || "${token}" == "--fire" ]]; then \
@@ -266,6 +272,9 @@ test name="imu" arg="" arg2="" arg3="" arg4="" config=default_config build_dir=d
       local_display=":${token}"; \
     elif [[ "${token}" == "-v" || "${token}" == "--verbose" || "${token}" == --distance=* || "${token}" == --radius=* || "${token}" == --height=* || "${token}" == --height-amp=* || "${token}" == --omega=* || "${token}" == --hz=* ]]; then \
       gimbal_opts="${gimbal_opts} ${token}"; \
+    elif [[ "${token}" == -* ]]; then \
+      echo "[test] Unknown flag '${token}'. See: just test-help" >&2; \
+      exit 1; \
     else \
       cfg="${token}"; \
     fi; \
@@ -296,7 +305,11 @@ test name="imu" arg="" arg2="" arg3="" arg4="" config=default_config build_dir=d
   case "{{name}}" in \
     imu) run_with_display ./{{build_dir}}/imu_communication_test "${cfg}" ;; \
     camera) if [[ "${display}" == "true" ]]; then run_with_display ./{{build_dir}}/camera_test "${cfg}" -d; else run_with_display ./{{build_dir}}/camera_test "${cfg}"; fi ;; \
-    detect) if [[ "${send}" == "true" ]]; then run_with_display ./{{build_dir}}/auto_aim_camera_test "${cfg}" --send; else run_with_display ./{{build_dir}}/auto_aim_camera_test "${cfg}"; fi ;; \
+    detect) \
+      detect_opts=""; \
+      if [[ "${send}" == "true" ]]; then detect_opts="${detect_opts} --send"; fi; \
+      if [[ "${display}" == "true" ]]; then detect_opts="${detect_opts} --display"; fi; \
+      run_with_display ./{{build_dir}}/auto_aim_camera_test "${cfg}" ${detect_opts} ;; \
     gimbal) if [[ "${fire}" == "true" ]]; then run_with_display ./{{build_dir}}/gimbal_test -f "${cfg}" ${gimbal_opts}; else run_with_display ./{{build_dir}}/gimbal_test "${cfg}" ${gimbal_opts}; fi ;; \
   esac
 
@@ -311,7 +324,7 @@ test-help:
   @echo "  gimbal  - Vision-like target simulation and protocol send test"
   @echo ""
   @echo "Flags:"
-  @echo "  -d, --display    camera: show GUI window"
+  @echo "  -d, --display    camera/detect: show GUI window"
   @echo "  -s, --send       detect: send command to lower machine"
   @echo "  --no-send        detect: disable send (default)"
   @echo "  -f, --fire       gimbal: enable fire pulse"
@@ -337,3 +350,11 @@ test-help:
   @echo "  just test gimbal --fire"
   @echo "  just test gimbal --distance=4 --radius=0.8 --omega=1.5 --hz=120"
   @echo "  just test gimbal --verbose"
+
+# Build a TensorRT engine from an ONNX model.
+trt-engine onnx="" engine="" precision="fp16":
+  @if [[ -z "{{onnx}}" || -z "{{engine}}" ]]; then \
+    echo "Usage: just trt-engine --onnx=assets/model.onnx --engine=assets/model.plan [--precision=fp16|fp32]" >&2; \
+    exit 1; \
+  fi; \
+  command bash ./tools/build_trt_engine.sh "{{onnx}}" "{{engine}}" "{{precision}}"
