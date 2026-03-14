@@ -57,6 +57,8 @@ make target="" build_dir=default_build_dir jobs=default_jobs:
 ensure-configured build_dir=default_build_dir profile=default_profile use_tensorrt=default_use_tensorrt openvino_dir=default_openvino_dir:
   @need_configure="false"; \
   reason=""; \
+  requested_tensorrt="{{use_tensorrt}}"; \
+  requested_tensorrt="${requested_tensorrt^^}"; \
   if [[ ! -f "{{build_dir}}/CMakeCache.txt" ]]; then \
     need_configure="true"; \
     reason="missing CMakeCache.txt"; \
@@ -74,6 +76,18 @@ ensure-configured build_dir=default_build_dir profile=default_profile use_tensor
     if [[ -n "${generator}" && "${generator}" != "{{default_cmake_generator}}" ]]; then \
       need_configure="true"; \
       reason="generator mismatch: ${generator}"; \
+    fi; \
+    cache_tensorrt=""; \
+    while IFS= read -r line; do \
+      if [[ "${line}" == USE_TENSORRT:BOOL=* ]]; then \
+        cache_tensorrt="${line#USE_TENSORRT:BOOL=}"; \
+        break; \
+      fi; \
+    done < "{{build_dir}}/CMakeCache.txt"; \
+    cache_tensorrt="${cache_tensorrt^^}"; \
+    if [[ "${need_configure}" != "true" && -n "${cache_tensorrt}" && "${cache_tensorrt}" != "${requested_tensorrt}" ]]; then \
+      need_configure="true"; \
+      reason="USE_TENSORRT mismatch: cache=${cache_tensorrt}, requested=${requested_tensorrt}"; \
     fi; \
   fi; \
   if [[ "${need_configure}" == "true" ]]; then \
@@ -242,7 +256,7 @@ calibrate-help:
 
 # Unified test launcher. See `just test-help` for detailed usage.
 test name="imu" arg="" arg2="" arg3="" arg4="" config=default_config build_dir=default_build_dir jobs=default_jobs:
-  @cfg="{{config}}"; display="false"; send="false"; fire="false"; gimbal_opts=""; local_display=""; local_xauth=""; test_target=""; \
+  @cfg="{{config}}"; display="false"; send="false"; fire="false"; gimbal_opts=""; local_display=""; local_xauth=""; test_target=""; test_use_tensorrt="{{default_use_tensorrt}}"; \
   for token in "{{arg}}" "{{arg2}}" "{{arg3}}" "{{arg4}}"; do \
     if [[ -z "${token}" ]]; then \
       continue; \
@@ -282,14 +296,14 @@ test name="imu" arg="" arg2="" arg3="" arg4="" config=default_config build_dir=d
   if [[ -n "${local_display}" && -z "${local_xauth}" ]]; then \
     local_xauth="${HOME}/.Xauthority"; \
   fi; \
-  just ensure-configured "{{build_dir}}" "{{default_profile}}" "{{default_use_tensorrt}}" "{{default_openvino_dir}}"; \
   case "{{name}}" in \
     imu) test_target="imu_communication_test" ;; \
     camera) test_target="camera_test" ;; \
-    detect) test_target="auto_aim_camera_test" ;; \
+    detect) test_target="auto_aim_camera_test"; test_use_tensorrt="ON" ;; \
     gimbal) test_target="gimbal_test" ;; \
     *) echo "[test] Unknown test '{{name}}'. Supported: imu, camera, detect, gimbal. See: just test-help" >&2; exit 1 ;; \
   esac; \
+  just ensure-configured "{{build_dir}}" "{{default_profile}}" "${test_use_tensorrt}" "{{default_openvino_dir}}"; \
   command cmake --build {{build_dir}} --target "${test_target}" -j{{jobs}}; \
   run_with_display() { \
     if [[ -n "${local_display}" ]]; then \
@@ -338,6 +352,7 @@ test-help:
   @echo "  --local-display[=:N] force GUI to physical X display (default :0)"
   @echo "  :N or N          shorthand display selector, e.g. '-d 0' => DISPLAY=:0"
   @echo "  --xauthority=..      Xauthority path for --local-display (default: $HOME/.Xauthority)"
+  @echo "  note: detect auto-configures USE_TENSORRT=ON (requires TensorRT/CUDA libs)"
   @echo "  (interactive)    gimbal: aim <yaw_deg> [pitch_deg], sim on/off, send on/off"
   @echo ""
   @echo "Examples:"

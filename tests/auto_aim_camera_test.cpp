@@ -94,9 +94,9 @@ int main(int argc, char * argv[])
     frame_count++;
     if (mode == io::Mode::auto_aim && frame_count % log_interval == 0) {
       tools::logger()->info(
-        "tx:{} cmd: control={} yaw={:.2f} pitch={:.2f} shoot={} | fps {:.2f}",
-        send_to_gimbal, command.control, command.yaw * 57.3, command.pitch * 57.3,
-        command.shoot, fps);
+        "armors:{} tx:{} cmd: control={} yaw={:.2f} pitch={:.2f} shoot={} | fps {:.2f}",
+        armors.size(), send_to_gimbal, command.control, command.yaw * 57.3,
+        command.pitch * 57.3, command.shoot, fps);
     }
 
     for (const auto & armor : armors) {

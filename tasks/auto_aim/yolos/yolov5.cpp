@@ -35,6 +35,11 @@ YOLOV5::YOLOV5(const std::string & config_path, bool debug)
       model_path_ = yaml["yolov5_trt_engine_path"].as<std::string>();
     }
   }
+  if (yaml["yolov5_score_threshold"]) {
+    score_threshold_ = yaml["yolov5_score_threshold"].as<float>();
+  } else if (backend_ == "tensorrt") {
+    score_threshold_ = 0.55F;
+  }
   binary_threshold_ = yaml["threshold"].as<double>();
   min_confidence_ = yaml["min_confidence"].as<double>();
   int x = 0, y = 0, width = 0, height = 0;
@@ -99,6 +104,7 @@ YOLOV5::YOLOV5(const std::string & config_path, bool debug)
     compiled_model_ = core_.compile_model(
       model, device_, ov::hint::performance_mode(ov::hint::PerformanceMode::LATENCY));
   }
+  tools::logger()->info("[YOLOV5] score threshold: {:.2f}", score_threshold_);
 }
 
 std::list<Armor> YOLOV5::detect(const cv::Mat & raw_img, int frame_count)
@@ -108,57 +114,73 @@ std::list<Armor> YOLOV5::detect(const cv::Mat & raw_img, int frame_count)
     return std::list<Armor>();
   }
 
-  cv::Mat bgr_img;
+  auto run_once = [&](const cv::Mat & bgr_img) {
+    auto x_scale = static_cast<double>(640) / bgr_img.rows;
+    auto y_scale = static_cast<double>(640) / bgr_img.cols;
+    auto scale = std::min(x_scale, y_scale);
+    auto h = static_cast<int>(bgr_img.rows * scale);
+    auto w = static_cast<int>(bgr_img.cols * scale);
+
+    auto input = cv::Mat(640, 640, CV_8UC3, cv::Scalar(0, 0, 0));
+    auto roi = cv::Rect(0, 0, w, h);
+    cv::resize(bgr_img, input(roi), {w, h});
+
+    if (backend_ == "tensorrt") {
+#ifdef USE_TENSORRT
+      cv::Mat blob = cv::dnn::blobFromImage(
+        input, 1.0 / 255.0, cv::Size(), cv::Scalar(), true, false, CV_32F);
+      auto output_data = trt_engine_->infer(blob.ptr<float>(), blob.total());
+      auto shape = trt_engine_->output_shape();
+      if (shape.size() != 3) {
+        throw std::runtime_error("Unexpected TensorRT output shape");
+      }
+      cv::Mat output(shape[1], shape[2], CV_32F, output_data.data());
+      return parse(scale, output, raw_img, frame_count);
+#else
+      throw std::runtime_error("TensorRT backend requested but USE_TENSORRT is OFF");
+#endif
+    }
+
+    ov::Tensor input_tensor(ov::element::u8, {1, 640, 640, 3}, input.data);
+    auto infer_request = compiled_model_.create_infer_request();
+    infer_request.set_input_tensor(input_tensor);
+    infer_request.infer();
+
+    auto output_tensor = infer_request.get_output_tensor();
+    auto output_shape = output_tensor.get_shape();
+    cv::Mat output(output_shape[1], output_shape[2], CV_32F, output_tensor.data());
+    return parse(scale, output, raw_img, frame_count);
+  };
+
+  cv::Mat roi_img = raw_img;
   if (use_roi_) {
-    if (roi_.width == -1) {  // -1 表示该维度不裁切
+    if (roi_.width == -1) {
       roi_.width = raw_img.cols;
     }
-    if (roi_.height == -1) {  // -1 表示该维度不裁切
+    if (roi_.height == -1) {
       roi_.height = raw_img.rows;
     }
-    bgr_img = raw_img(roi_);
-  } else {
-    bgr_img = raw_img;
+    roi_img = raw_img(roi_);
   }
 
-  auto x_scale = static_cast<double>(640) / bgr_img.rows;
-  auto y_scale = static_cast<double>(640) / bgr_img.cols;
-  auto scale = std::min(x_scale, y_scale);
-  auto h = static_cast<int>(bgr_img.rows * scale);
-  auto w = static_cast<int>(bgr_img.cols * scale);
-
-  // preproces
-  auto input = cv::Mat(640, 640, CV_8UC3, cv::Scalar(0, 0, 0));
-  auto roi = cv::Rect(0, 0, w, h);
-  cv::resize(bgr_img, input(roi), {w, h});
-  if (backend_ == "tensorrt") {
-#ifdef USE_TENSORRT
-    cv::Mat blob = cv::dnn::blobFromImage(
-      input, 1.0 / 255.0, cv::Size(), cv::Scalar(), true, false, CV_32F);
-    auto output_data = trt_engine_->infer(blob.ptr<float>(), blob.total());
-    auto shape = trt_engine_->output_shape();
-    if (shape.size() != 3) {
-      throw std::runtime_error("Unexpected TensorRT output shape");
+  auto armors = run_once(roi_img);
+  if (armors.empty() && use_roi_) {
+    auto old_use_roi = use_roi_;
+    auto old_offset = offset_;
+    use_roi_ = false;
+    offset_ = {0.0F, 0.0F};
+    auto full_frame_armors = run_once(raw_img);
+    use_roi_ = old_use_roi;
+    offset_ = old_offset;
+    if (!full_frame_armors.empty()) {
+      if (frame_count % 60 == 0) {
+        tools::logger()->info("[YOLOV5] ROI miss, fallback to full frame succeeded");
+      }
+      return full_frame_armors;
     }
-    cv::Mat output(shape[1], shape[2], CV_32F, output_data.data());
-    return parse(scale, output, raw_img, frame_count);
-#else
-    throw std::runtime_error("TensorRT backend requested but USE_TENSORRT is OFF");
-#endif
   }
 
-  ov::Tensor input_tensor(ov::element::u8, {1, 640, 640, 3}, input.data);
-
-  // infer
-  auto infer_request = compiled_model_.create_infer_request();
-  infer_request.set_input_tensor(input_tensor);
-  infer_request.infer();
-
-  // postprocess
-  auto output_tensor = infer_request.get_output_tensor();
-  auto output_shape = output_tensor.get_shape();
-  cv::Mat output(output_shape[1], output_shape[2], CV_32F, output_tensor.data());
-  return parse(scale, output, raw_img, frame_count);
+  return armors;
 }
 
 std::list<Armor> YOLOV5::parse(
@@ -171,7 +193,9 @@ std::list<Armor> YOLOV5::parse(
   std::vector<std::vector<cv::Point2f>> armors_key_points;
   for (int r = 0; r < output.rows; r++) {
     double score = output.at<float>(r, 8);
-    score = sigmoid(score);
+    if (score < 0.0 || score > 1.0) {
+      score = sigmoid(score);
+    }
 
     if (score < score_threshold_) continue;
 
