@@ -8,9 +8,9 @@ default_cmake_generator := "Unix Makefiles"
 default_config := "configs/odin.yaml"
 default_calib_config := "configs/calibration.yaml"
 default_calib_folder := "assets/img_with_q"
-default_jobs := "4"
+default_jobs := `nproc`
 default_profile := "Release"
-default_use_tensorrt := "OFF"
+default_use_tensorrt := "ON"
 default_openvino_dir := ""
 
 # Configure project (auto picks OpenVINO_DIR if available).
@@ -37,12 +37,17 @@ cmake build_dir=default_build_dir profile=default_profile use_tensorrt=default_u
   if [[ -z "${ov_dir}" && -d "/home/nyu/venvs/spvision/lib/python3.10/site-packages/openvino/cmake" ]]; then \
     ov_dir="/home/nyu/venvs/spvision/lib/python3.10/site-packages/openvino/cmake"; \
   fi; \
+  launcher_args=(); \
+  if command -v ccache >/dev/null 2>&1; then \
+    launcher_args=(-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache); \
+    echo "[cmake] Using ccache compiler launcher"; \
+  fi; \
   if [[ -n "${ov_dir}" ]]; then \
     echo "[cmake] Using OpenVINO_DIR=${ov_dir}"; \
-    command cmake -G "{{default_cmake_generator}}" -S . -B {{build_dir}} -DCMAKE_BUILD_TYPE={{profile}} -DUSE_TENSORRT={{use_tensorrt}} -DOpenVINO_DIR="${ov_dir}"; \
+    command cmake -G "{{default_cmake_generator}}" -S . -B {{build_dir}} -DCMAKE_BUILD_TYPE={{profile}} -DUSE_TENSORRT={{use_tensorrt}} "${launcher_args[@]}" -DOpenVINO_DIR="${ov_dir}"; \
   else \
     echo "[cmake] OpenVINO_DIR not set, trying system default"; \
-    command cmake -G "{{default_cmake_generator}}" -S . -B {{build_dir}} -DCMAKE_BUILD_TYPE={{profile}} -DUSE_TENSORRT={{use_tensorrt}}; \
+    command cmake -G "{{default_cmake_generator}}" -S . -B {{build_dir}} -DCMAKE_BUILD_TYPE={{profile}} -DUSE_TENSORRT={{use_tensorrt}} "${launcher_args[@]}"; \
   fi
 
 # Build all targets or one specific target.
@@ -304,7 +309,7 @@ test name="imu" arg="" arg2="" arg3="" arg4="" config=default_config build_dir=d
     *) echo "[test] Unknown test '{{name}}'. Supported: imu, camera, detect, gimbal. See: just test-help" >&2; exit 1 ;; \
   esac; \
   just ensure-configured "{{build_dir}}" "{{default_profile}}" "${test_use_tensorrt}" "{{default_openvino_dir}}"; \
-  command cmake --build {{build_dir}} --target "${test_target}" -j{{jobs}}; \
+  command cmake --build "{{build_dir}}" --target "${test_target}" -j{{jobs}}; \
   run_with_display() { \
     if [[ -n "${local_display}" ]]; then \
       if [[ -n "${local_xauth}" ]]; then \

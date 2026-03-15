@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <list>
 #include <opencv2/opencv.hpp>
 #include <sstream>
 
@@ -30,11 +31,12 @@ const std::string keys =
 
 namespace
 {
-constexpr int kTxHoldFrames = 4;
-constexpr int kTxWarmupFrames = 2;
+constexpr int kTxHoldFrames = 0;
+constexpr int kTxWarmupFrames = 1;
 constexpr double kTxMaxYawRateRadS = 1.0;
 constexpr double kTxMaxPitchRateRadS = 0.6;
 constexpr double kTxMinDtS = 1e-3;
+constexpr double kTxMaxCaptureAgeS = 0.20;
 
 std::filesystem::path make_detect_log_path()
 {
@@ -125,12 +127,28 @@ int main(int argc, char * argv[])
     auto q = cboard.imu_at(t - 1ms);
     auto mode = cboard.mode_cboard;
     auto gimbal_state = cboard.state();
+    auto control_now = std::chrono::steady_clock::now();
+    auto capture_age_s = tools::delta_time(control_now, t);
+    bool stale_capture = capture_age_s > kTxMaxCaptureAgeS;
 
     solver.set_R_gimbal2world(q);
 
     auto armors = detector.detect(img);
-    auto targets = tracker.track(armors, t);
+    std::list<auto_aim::Target> targets;
+    if (!stale_capture) {
+      targets = tracker.track(armors, t);
+    } else {
+      armors.clear();
+    }
     auto raw_command = aimer.aim(targets, t, cboard.bullet_speed);
+    if (stale_capture || armors.empty()) {
+      raw_command.control = false;
+      raw_command.shoot = false;
+    }
+    if (stale_capture) {
+      raw_command.yaw = gimbal_state.yaw;
+      raw_command.pitch = gimbal_state.pitch;
+    }
     auto command = raw_command;
     bool hold_applied = false;
     bool slew_applied = false;
@@ -144,7 +162,7 @@ int main(int argc, char * argv[])
       raw_control_streak = 0;
       has_last_sent_command = false;
     } else {
-      if (raw_command.control && !armors.empty()) {
+      if (raw_command.control) {
         raw_control_streak++;
       } else {
         raw_control_streak = 0;
@@ -155,35 +173,23 @@ int main(int argc, char * argv[])
 
       if (effective_control) {
         hold_frames_left = kTxHoldFrames;
-      } else if (
-        !armors.empty() && has_last_sent_command && last_sent_command.control && hold_frames_left > 0) {
+      } else if (has_last_sent_command && last_sent_command.control && hold_frames_left > 0) {
         command = last_sent_command;
+        command.control = true;
         command.shoot = false;
         hold_frames_left--;
         hold_applied = true;
       } else {
         command.control = false;
         command.shoot = false;
-        if (armors.empty()) {
-          hold_frames_left = 0;
-        }
-      }
-
-      if (effective_control && !has_last_sent_command) {
-        command.control = true;
-        command.shoot = false;
-        command.yaw = gimbal_state.yaw;
-        command.pitch = gimbal_state.pitch;
-        startup_sync_applied = true;
+        hold_frames_left = 0;
       }
 
       if (effective_control && !hold_applied) {
         command.control = true;
         command.shoot = raw_command.shoot;
-        if (!startup_sync_applied) {
-          command.yaw = raw_command.yaw;
-          command.pitch = raw_command.pitch;
-        }
+        command.yaw = raw_command.yaw;
+        command.pitch = raw_command.pitch;
       }
 
       if (command.control && has_last_sent_command && last_sent_command.control && !hold_applied) {
@@ -212,6 +218,11 @@ int main(int argc, char * argv[])
           slew_applied = true;
         }
       }
+
+      if (!command.control) {
+        command.yaw = gimbal_state.yaw;
+        command.pitch = gimbal_state.pitch;
+      }
     }
 
     if (command.control) {
@@ -232,7 +243,6 @@ int main(int argc, char * argv[])
     frame_count++;
     if (detect_log.is_open()) {
       auto elapsed_s = tools::delta_time(now, test_start);
-      auto capture_age_s = tools::delta_time(now, t);
       detect_log << frame_count << ',' << elapsed_s << ',' << capture_age_s << ',' << armors.size()
                  << ',' << static_cast<int>(mode) << ',' << (send_to_gimbal ? 1 : 0) << ','
                  << (raw_command.control ? 1 : 0) << ',' << (raw_command.shoot ? 1 : 0) << ','
@@ -251,9 +261,10 @@ int main(int argc, char * argv[])
 
     if (mode == io::Mode::auto_aim && frame_count % log_interval == 0) {
       tools::logger()->info(
-        "armors:{} tx:{} raw_ctl={} streak={} raw_yaw={:.2f} | sent_ctl={} yaw={:.2f} "
+        "armors:{} tx:{} stale={} raw_ctl={} streak={} raw_yaw={:.2f} | sent_ctl={} yaw={:.2f} "
         "pitch={:.2f} hold={} slew={} sync={} shoot={} | fps {:.2f}",
-        armors.size(), send_to_gimbal, raw_command.control, raw_control_streak,
+        armors.size(), send_to_gimbal, stale_capture,
+        raw_command.control, raw_control_streak,
         raw_command.yaw * 57.3, command.control, command.yaw * 57.3, command.pitch * 57.3,
         hold_applied, slew_applied, startup_sync_applied, command.shoot, fps);
     }
