@@ -1,13 +1,19 @@
 #include <fmt/core.h>
 
 #include <chrono>
+#include <atomic>
+#include <condition_variable>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <list>
+#include <memory>
+#include <mutex>
 #include <opencv2/opencv.hpp>
 #include <sstream>
+#include <string>
+#include <thread>
 
 #include "io/camera.hpp"
 #include "io/gimbal/gimbal.hpp"
@@ -37,6 +43,22 @@ constexpr double kTxMaxYawRateRadS = 1.0;
 constexpr double kTxMaxPitchRateRadS = 0.6;
 constexpr double kTxMinDtS = 1e-3;
 constexpr double kTxMaxCaptureAgeS = 0.20;
+constexpr int kX11ForwardDisplayMaxWidth = 480;
+
+bool is_likely_x11_forwarding()
+{
+  const char * display_env = std::getenv("DISPLAY");
+  if (display_env == nullptr) return false;
+  std::string display(display_env);
+
+  const bool has_ssh = std::getenv("SSH_CONNECTION") != nullptr ||
+                       std::getenv("SSH_CLIENT") != nullptr || std::getenv("SSH_TTY") != nullptr;
+  const bool local_display = display.rfind(":0", 0) == 0 || display.rfind(":1", 0) == 0;
+  const bool forwarded_display = display.rfind("localhost:", 0) == 0 || display.rfind("127.0.0.1:", 0) == 0 ||
+                                 (!local_display && display.find(':') != std::string::npos);
+
+  return has_ssh && forwarded_display;
+}
 
 std::filesystem::path make_detect_log_path()
 {
@@ -57,6 +79,108 @@ std::filesystem::path make_detect_log_path()
   name << "detect_rx_tx_" << std::put_time(&local_tm, "%Y%m%d_%H%M%S") << ".csv";
   return log_dir / name.str();
 }
+
+class DisplayWorker
+{
+ public:
+  explicit DisplayWorker(std::string window_name, bool reduce_resolution)
+    : window_name_(std::move(window_name)), reduce_resolution_(reduce_resolution)
+  {
+  }
+
+  ~DisplayWorker()
+  {
+    stop();
+  }
+
+  void start()
+  {
+    worker_ = std::thread([this]() { run(); });
+  }
+
+  void stop()
+  {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      stop_requested_ = true;
+    }
+    cond_.notify_all();
+    if (worker_.joinable()) {
+      worker_.join();
+    }
+  }
+
+  void submit(const cv::Mat & frame)
+  {
+    if (failed_.load()) return;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      frame.copyTo(latest_frame_);
+      has_frame_ = true;
+    }
+    cond_.notify_one();
+  }
+
+  bool should_exit() const
+  {
+    return exit_requested_.load();
+  }
+
+  bool failed() const
+  {
+    return failed_.load();
+  }
+
+ private:
+  void run()
+  {
+    try {
+      while (true) {
+        cv::Mat frame;
+        {
+          std::unique_lock<std::mutex> lock(mutex_);
+          cond_.wait_for(lock, 5ms, [this]() { return stop_requested_ || has_frame_; });
+          if (stop_requested_) break;
+          if (has_frame_) {
+            latest_frame_.copyTo(frame);
+            has_frame_ = false;
+          }
+        }
+
+        if (!frame.empty()) {
+          cv::Mat shown_frame = frame;
+          if (reduce_resolution_ && frame.cols > kX11ForwardDisplayMaxWidth) {
+            const double scale =
+              static_cast<double>(kX11ForwardDisplayMaxWidth) / static_cast<double>(frame.cols);
+            const int target_w = std::max(1, static_cast<int>(frame.cols * scale));
+            const int target_h = std::max(1, static_cast<int>(frame.rows * scale));
+            cv::resize(frame, shown_frame, cv::Size(target_w, target_h), 0.0, 0.0, cv::INTER_AREA);
+          }
+          cv::imshow(window_name_, shown_frame);
+        }
+        if (cv::waitKey(1) == 'q') {
+          exit_requested_.store(true);
+          break;
+        }
+      }
+      cv::destroyWindow(window_name_);
+    } catch (const cv::Exception & e) {
+      tools::logger()->warn("disable display due to OpenCV GUI error: {}", e.what());
+      failed_.store(true);
+    }
+  }
+
+  std::string window_name_;
+  bool reduce_resolution_ = false;
+  std::thread worker_;
+  mutable std::mutex mutex_;
+  std::condition_variable cond_;
+  cv::Mat latest_frame_;
+  bool has_frame_ = false;
+  bool stop_requested_ = false;
+  std::atomic<bool> exit_requested_{false};
+  std::atomic<bool> failed_{false};
+};
 }  // namespace
 
 int main(int argc, char * argv[])
@@ -119,8 +243,20 @@ int main(int argc, char * argv[])
   int hold_frames_left = 0;
   int raw_control_streak = 0;
   int frame_count = 0;
+  std::unique_ptr<DisplayWorker> display_worker;
 
-  while (!exiter.exit()) {
+  if (display) {
+    const bool x11_forwarding = is_likely_x11_forwarding();
+    if (x11_forwarding) {
+      tools::logger()->info(
+        "X11 forwarding detected, display will be downscaled to width <= {} for smoother GUI",
+        kX11ForwardDisplayMaxWidth);
+    }
+    display_worker = std::make_unique<DisplayWorker>("auto_aim_camera_test", x11_forwarding);
+    display_worker->start();
+  }
+
+  while (!exiter.exit() && !(display_worker && display_worker->should_exit())) {
     camera.read(img, t);
     if (img.empty()) break;
 
@@ -311,15 +447,17 @@ int main(int argc, char * argv[])
         gimbal_state.bullet_speed, gimbal_state.bullet_count),
       {10, 150}, {255, 255, 0});
 
-    if (display) {
-      try {
-        cv::imshow("auto_aim_camera_test", img);
-        if (cv::waitKey(1) == 'q') break;
-      } catch (const cv::Exception & e) {
-        tools::logger()->warn("disable display due to OpenCV GUI error: {}", e.what());
-        display = false;
+    if (display_worker) {
+      display_worker->submit(img);
+      if (display_worker->failed()) {
+        display_worker->stop();
+        display_worker.reset();
       }
     }
+  }
+
+  if (display_worker) {
+    display_worker->stop();
   }
 
   return 0;
