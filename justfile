@@ -261,7 +261,7 @@ calibrate-help:
 
 # Unified test launcher. See `just test-help` for detailed usage.
 test name="imu" arg="" arg2="" arg3="" arg4="" config=default_config build_dir=default_build_dir jobs=default_jobs:
-  @cfg="{{config}}"; display="false"; send="false"; fire="false"; gimbal_opts=""; local_display=""; local_xauth=""; test_target=""; test_use_tensorrt="{{default_use_tensorrt}}"; \
+  @cfg="{{config}}"; display="false"; send="false"; fire="false"; use_web="false"; web_port="8888"; gimbal_opts=""; local_display=""; local_xauth=""; test_target=""; test_use_tensorrt="{{default_use_tensorrt}}"; \
   for token in "{{arg}}" "{{arg2}}" "{{arg3}}" "{{arg4}}"; do \
     if [[ -z "${token}" ]]; then \
       continue; \
@@ -273,6 +273,10 @@ test name="imu" arg="" arg2="" arg3="" arg4="" config=default_config build_dir=d
     elif [[ "${token}" =~ ^-d:[0-9]+$ ]]; then \
       display="true"; \
       local_display="${token:2}"; \
+    elif [[ "${token}" == "-w" || "${token}" == "--web" ]]; then \
+      use_web="true"; \
+    elif [[ "${token}" == --web-port=* ]]; then \
+      web_port="${token#--web-port=}"; \
     elif [[ "${token}" == "-s" || "${token}" == "--send" ]]; then \
       send="true"; \
     elif [[ "${token}" == "-f" || "${token}" == "--fire" ]]; then \
@@ -327,7 +331,11 @@ test name="imu" arg="" arg2="" arg3="" arg4="" config=default_config build_dir=d
     detect) \
       detect_opts=""; \
       if [[ "${send}" == "true" ]]; then detect_opts="${detect_opts} --send"; fi; \
-      if [[ "${display}" == "true" ]]; then detect_opts="${detect_opts} --display"; fi; \
+      if [[ "${use_web}" == "true" ]]; then \
+        detect_opts="${detect_opts} --web --web-port=${web_port}"; \
+      elif [[ "${display}" == "true" ]]; then \
+        detect_opts="${detect_opts} --display"; \
+      fi; \
       run_with_display ./{{build_dir}}/auto_aim_camera_test "${cfg}" ${detect_opts} ;; \
     gimbal) if [[ "${fire}" == "true" ]]; then run_with_display ./{{build_dir}}/gimbal_test -f "${cfg}" ${gimbal_opts}; else run_with_display ./{{build_dir}}/gimbal_test "${cfg}" ${gimbal_opts}; fi ;; \
   esac
@@ -343,7 +351,9 @@ test-help:
   @echo "  gimbal  - Vision-like target simulation and protocol send test"
   @echo ""
   @echo "Flags:"
-  @echo "  -d, --display    camera/detect: show GUI window"
+  @echo "  -d, --display    camera/detect: show GUI window (X11)"
+  @echo "  -w, --web        detect: show web interface (http://localhost:8888)"
+  @echo "  --web-port=N     detect: web server port (default: 8888)"
   @echo "  -s, --send       detect: send command to lower machine"
   @echo "  --no-send        detect: disable send (default)"
   @echo "  -f, --fire       gimbal: enable fire pulse"
@@ -365,6 +375,9 @@ test-help:
   @echo "  just test camera -d"
   @echo "  just test camera -d 0"
   @echo "  just test camera -d --local-display"
+  @echo "  just test detect --web"
+  @echo "  just test detect --web --web-port=9000"
+  @echo "  just test detect --web --send"
   @echo "  just test detect --local-display=:0 --xauthority=/home/nyu/.Xauthority"
   @echo "  just test detect configs/odin.yaml --send"
   @echo "  just test gimbal --fire"

@@ -25,6 +25,7 @@
 #include "tools/img_tools.hpp"
 #include "tools/logger.hpp"
 #include "tools/math_tools.hpp"
+#include "tools/web/web_display_worker.hpp"
 
 using namespace std::chrono_literals;
 
@@ -33,7 +34,9 @@ const std::string keys =
   "{@config-path   | configs/standard.yaml     | yaml配置文件的路径}"
   "{log-interval l | 10                        | 终端输出间隔帧数  }"
   "{send s         |                           | 发送控制到下位机  }"
-  "{d display      |                           | 显示检测调试画面  }";
+  "{d display      |                           | 显示检测调试画面  }"
+  "{web w          |                           | 使用Web界面显示(localhost:8080)  }"
+  "{web-port       | 8080                      | Web服务器端口号   }";
 
 namespace
 {
@@ -195,9 +198,17 @@ int main(int argc, char * argv[])
   auto log_interval = cli.get<int>("log-interval");
   auto send_to_gimbal = cli.has("send");
   auto display = cli.has("display");
+  auto use_web = cli.has("web");
+  auto web_port = cli.get<int>("web-port");
   if (config_path.empty()) {
     cli.printMessage();
     return 0;
+  }
+
+  // Web display takes precedence over X11 display
+  if (use_web && display) {
+    tools::logger()->warn("Both --web and --display specified, using web display");
+    display = false;
   }
 
   if (display && std::getenv("DISPLAY") == nullptr) {
@@ -205,7 +216,8 @@ int main(int argc, char * argv[])
     display = false;
   }
 
-  tools::logger()->info("auto_aim_camera_test started, send={}", send_to_gimbal);
+  tools::logger()->info("auto_aim_camera_test started, send={}, display_mode={}", 
+                        send_to_gimbal, use_web ? "web" : (display ? "x11" : "headless"));
 
   tools::Exiter exiter;
 
@@ -244,8 +256,14 @@ int main(int argc, char * argv[])
   int raw_control_streak = 0;
   int frame_count = 0;
   std::unique_ptr<DisplayWorker> display_worker;
+  std::unique_ptr<tools::WebDisplayWorker> web_display_worker;
 
-  if (display) {
+  if (use_web) {
+    // Web display: title, port, JPEG quality (60 for faster encoding), max width (480 for smooth streaming)
+    web_display_worker = std::make_unique<tools::WebDisplayWorker>("Auto Aim Camera Test", web_port, 60, 480);
+    web_display_worker->start();
+    tools::logger()->info("Web display started on http://localhost:{}", web_port);
+  } else if (display) {
     const bool x11_forwarding = is_likely_x11_forwarding();
     if (x11_forwarding) {
       tools::logger()->info(
@@ -256,7 +274,8 @@ int main(int argc, char * argv[])
     display_worker->start();
   }
 
-  while (!exiter.exit() && !(display_worker && display_worker->should_exit())) {
+  while (!exiter.exit() && !(display_worker && display_worker->should_exit()) && 
+         !(web_display_worker && web_display_worker->failed())) {
     camera.read(img, t);
     if (img.empty()) break;
 
@@ -405,49 +424,115 @@ int main(int argc, char * argv[])
         hold_applied, slew_applied, startup_sync_applied, command.shoot, fps);
     }
 
+    // Draw armor detection boxes
     for (const auto & armor : armors) {
       tools::draw_points(img, armor.points, {0, 255, 0});
-      tools::draw_text(
-        img, fmt::format("{} {:.2f}", auto_aim::ARMOR_NAMES[armor.name], armor.confidence),
-        armor.center, {0, 255, 0}, 0.6, 2);
+      // Only draw text labels in X11 display mode, not in web mode
+      if (!use_web) {
+        tools::draw_text(
+          img, fmt::format("{} {:.2f}", auto_aim::ARMOR_NAMES[armor.name], armor.confidence),
+          armor.center, {0, 255, 0}, 0.6, 2);
+      }
     }
 
-    tools::draw_text(
-      img,
-      fmt::format(
-        "mode:{} armors:{} tx:{} fps:{:.2f}", io::MODES[mode], armors.size(), send_to_gimbal, fps),
-      {10, 30}, {255, 255, 255});
+    // Draw overlays only for X11 display mode, not for web (web shows data separately)
+    if (!use_web) {
+      tools::draw_text(
+        img,
+        fmt::format(
+          "mode:{} armors:{} tx:{} fps:{:.2f}", io::MODES[mode], armors.size(), send_to_gimbal, fps),
+        {10, 30}, {255, 255, 255});
 
-    tools::draw_text(
-      img,
-      fmt::format(
-        "tx_sent(rad): tx:{} ctl:{} yaw:{:.4f} pitch:{:.4f} hold:{} slew:{} shoot:{}",
-        send_to_gimbal, command.control, command.yaw, command.pitch, hold_applied, slew_applied,
-        command.shoot),
-      {10, 60}, {154, 50, 205});
+      tools::draw_text(
+        img,
+        fmt::format(
+          "tx_sent(rad): tx:{} ctl:{} yaw:{:.4f} pitch:{:.4f} hold:{} slew:{} shoot:{}",
+          send_to_gimbal, command.control, command.yaw, command.pitch, hold_applied, slew_applied,
+          command.shoot),
+        {10, 60}, {154, 50, 205});
 
-    tools::draw_text(
-      img,
-      fmt::format(
-        "tx_raw(rad): ctl:{} yaw:{:.4f} pitch:{:.4f}", raw_command.control, raw_command.yaw,
-        raw_command.pitch),
-      {10, 90}, {180, 120, 255});
+      tools::draw_text(
+        img,
+        fmt::format(
+          "tx_raw(rad): ctl:{} yaw:{:.4f} pitch:{:.4f}", raw_command.control, raw_command.yaw,
+          raw_command.pitch),
+        {10, 90}, {180, 120, 255});
 
-    tools::draw_text(
-      img,
-      fmt::format(
-        "rx(rad): yaw:{:.2f} pitch:{:.2f} yaw_v:{:.2f} pitch_v:{:.2f}",
-        gimbal_state.yaw, gimbal_state.pitch, gimbal_state.yaw_vel, gimbal_state.pitch_vel),
-      {10, 120}, {255, 255, 0});
+      tools::draw_text(
+        img,
+        fmt::format(
+          "rx(rad): yaw:{:.2f} pitch:{:.2f} yaw_v:{:.2f} pitch_v:{:.2f}",
+          gimbal_state.yaw, gimbal_state.pitch, gimbal_state.yaw_vel, gimbal_state.pitch_vel),
+        {10, 120}, {255, 255, 0});
 
-    tools::draw_text(
-      img,
-      fmt::format(
-        "rx: bullet_speed:{:.2f} bullet_count:{}",
-        gimbal_state.bullet_speed, gimbal_state.bullet_count),
-      {10, 150}, {255, 255, 0});
+      tools::draw_text(
+        img,
+        fmt::format(
+          "rx: bullet_speed:{:.2f} bullet_count:{}",
+          gimbal_state.bullet_speed, gimbal_state.bullet_count),
+        {10, 150}, {255, 255, 0});
+    }
 
-    if (display_worker) {
+    // Generate metadata JSON for web display
+    std::string metadata_json;
+    if (web_display_worker) {
+      metadata_json = fmt::format(
+        "{{"
+        "\"FPS\": \"{:.2f}\","
+        "\"Mode\": \"{}\","
+        "\"Armors Detected\": \"{}\","
+        "\"TX Enabled\": \"{}\","
+        "\"TX Control\": \"{}\","
+        "\"TX Shoot\": \"{}\","
+        "\"TX Yaw (deg)\": \"{:.2f}\","
+        "\"TX Pitch (deg)\": \"{:.2f}\","
+        "\"TX Hold Applied\": \"{}\","
+        "\"TX Slew Applied\": \"{}\","
+        "\"Raw Control\": \"{}\","
+        "\"Raw Yaw (deg)\": \"{:.2f}\","
+        "\"Raw Pitch (deg)\": \"{:.2f}\","
+        "\"Raw Streak\": \"{}\","
+        "\"RX Yaw (deg)\": \"{:.2f}\","
+        "\"RX Pitch (deg)\": \"{:.2f}\","
+        "\"RX Yaw Vel (deg/s)\": \"{:.2f}\","
+        "\"RX Pitch Vel (deg/s)\": \"{:.2f}\","
+        "\"RX Bullet Speed (m/s)\": \"{:.2f}\","
+        "\"RX Bullet Count\": \"{}\","
+        "\"Capture Age (ms)\": \"{:.1f}\","
+        "\"Stale Capture\": \"{}\""
+        "}}",
+        fps,
+        io::MODES[mode],
+        armors.size(),
+        send_to_gimbal ? "true" : "false",
+        command.control ? "true" : "false",
+        command.shoot ? "true" : "false",
+        command.yaw * 57.295779513,
+        command.pitch * 57.295779513,
+        hold_applied ? "true" : "false",
+        slew_applied ? "true" : "false",
+        raw_command.control ? "true" : "false",
+        raw_command.yaw * 57.295779513,
+        raw_command.pitch * 57.295779513,
+        raw_control_streak,
+        gimbal_state.yaw * 57.295779513,
+        gimbal_state.pitch * 57.295779513,
+        gimbal_state.yaw_vel * 57.295779513,
+        gimbal_state.pitch_vel * 57.295779513,
+        gimbal_state.bullet_speed,
+        gimbal_state.bullet_count,
+        capture_age_s * 1000.0,
+        stale_capture ? "true" : "false"
+      );
+    }
+
+    if (web_display_worker) {
+      web_display_worker->submit(img, metadata_json);
+      if (web_display_worker->failed()) {
+        web_display_worker->stop();
+        web_display_worker.reset();
+      }
+    } else if (display_worker) {
       display_worker->submit(img);
       if (display_worker->failed()) {
         display_worker->stop();
@@ -456,6 +541,10 @@ int main(int argc, char * argv[])
     }
   }
 
+  if (web_display_worker) {
+    web_display_worker->stop();
+  }
+  
   if (display_worker) {
     display_worker->stop();
   }
