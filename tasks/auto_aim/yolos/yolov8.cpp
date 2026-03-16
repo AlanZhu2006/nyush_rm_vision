@@ -73,7 +73,11 @@ YOLOV8::YOLOV8(const std::string & config_path, bool debug)
     // TODO: ov::hint::performance_mode(ov::hint::PerformanceMode::LATENCY)
     model = ppp.build();
     compiled_model_ = core_.compile_model(
-      model, device_, ov::hint::performance_mode(ov::hint::PerformanceMode::LATENCY));
+  model, device_, 
+  ov::hint::performance_mode(ov::hint::PerformanceMode::LATENCY),
+  ov::hint::inference_precision(ov::element::f16),  // Half precision
+  ov::hint::num_requests(1)  // Single request for lowest latency
+);
   }
 }
 

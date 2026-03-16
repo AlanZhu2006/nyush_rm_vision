@@ -10,7 +10,7 @@ using namespace std::chrono_literals;
 namespace io
 {
 USBCamera::USBCamera(const std::string & open_name, const std::string & config_path)
-: open_name_(open_name), quit_(false), ok_(false), queue_(1), open_count_(0)
+: open_name_(open_name), quit_(false), ok_(false), queue_(2), open_count_(0)
 {
   auto yaml = tools::load(config_path);
   image_width_ = tools::read<double>(yaml, "image_width");

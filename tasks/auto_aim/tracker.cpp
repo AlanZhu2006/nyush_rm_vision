@@ -289,29 +289,26 @@ bool Tracker::set_target(std::list<Armor> & armors, std::chrono::steady_clock::t
 bool Tracker::update_target(std::list<Armor> & armors, std::chrono::steady_clock::time_point t)
 {
   target_.predict(t);
-
+  
   int found_count = 0;
-  double min_x = 1e10;  // 画面最左侧
-  for (const auto & armor : armors) {
+  Armor* best_armor = nullptr;
+  double min_x = 1e10;
+  
+  for (auto & armor : armors) {
     if (armor.name != target_.name || armor.type != target_.armor_type) continue;
     found_count++;
-    min_x = armor.center.x < min_x ? armor.center.x : min_x;
+    if (armor.center.x < min_x) {
+      min_x = armor.center.x;
+      best_armor = &armor;
+    }
   }
-
+  
   if (found_count == 0) return false;
-
-  for (auto & armor : armors) {
-    if (
-      armor.name != target_.name || armor.type != target_.armor_type
-      //  || armor.center.x != min_x
-    )
-      continue;
-
-    solver_.solve(armor);
-
-    target_.update(armor);
-  }
-
+  
+  // Only solve PnP once for the best armor
+  solver_.solve(*best_armor);
+  target_.update(*best_armor);
+  
   return true;
 }
 

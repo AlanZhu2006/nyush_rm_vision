@@ -5,6 +5,7 @@
 #include <opencv2/opencv.hpp>
 
 #include "io/camera.hpp"
+#include "tasks/auto_aim/multithread/mt_detector.hpp"
 #include "io/gimbal/gimbal.hpp"
 #include "tasks/auto_aim/aimer.hpp"
 #include "tasks/auto_aim/multithread/commandgener.hpp"
@@ -41,7 +42,7 @@ int main(int argc, char * argv[])
   io::Gimbal cboard(config_path);
   io::Camera camera(config_path);
 
-  auto_aim::YOLO detector(config_path, false);
+  auto_aim::multithread::MultiThreadDetector detector(config_path, false);
   auto_aim::Solver solver(config_path);
   auto_aim::Tracker tracker(config_path, solver);
   auto_aim::Aimer aimer(config_path);
@@ -54,8 +55,15 @@ int main(int argc, char * argv[])
   auto mode = io::Mode::idle;
   auto last_mode = io::Mode::idle;
 
+  auto detect_thread = std::thread([&]() {
+  cv::Mat img;
+  std::chrono::steady_clock::time_point t;
+  
+
   while (!exiter.exit()) {
+    auto [armors, t] = detector.pop();
     camera.read(img, t);
+    detector.push(img, t);
     q = cboard.imu_at(t - 1ms);
     mode = cboard.mode_cboard;
 
