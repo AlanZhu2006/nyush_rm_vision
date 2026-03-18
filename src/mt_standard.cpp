@@ -84,7 +84,7 @@ int main(int argc, char * argv[])
 
     /// 自瞄
     if (mode.load() == io::Mode::auto_aim) {
-      auto [img, armors, t] = detector.debug_pop();
+      auto [armors, t] = detector.pop();
       Eigen::Quaterniond q = cboard.imu_at(t - 1ms);
 
       // recorder.record(img, q, t);

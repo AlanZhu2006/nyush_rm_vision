@@ -54,7 +54,7 @@ MultiThreadDetector::MultiThreadDetector(const std::string & config_path, bool d
 
     model = ppp.build();
     compiled_model_ = core_.compile_model(
-      model, device_, ov::hint::performance_mode(ov::hint::PerformanceMode::THROUGHPUT));
+      model, device_, ov::hint::performance_mode(ov::hint::PerformanceMode::LATENCY));
   }
 
   tools::logger()->info("[MultiThreadDetector] initialized !");

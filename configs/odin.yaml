@@ -14,7 +14,7 @@ yolo11_trt_engine_path: assets/yolo11.plan
 backend: tensorrt
 device: GPU
 min_confidence: 0.55
-use_traditional: true
+use_traditional: false
 
 #####-----ROI-----#####
 roi: 
@@ -55,7 +55,7 @@ max_side_ratio: 1.5
 max_rectangular_error: 25 # degree
 
 #####-----tracker参数-----#####
-min_detect_count: 5
+min_detect_count: 2
 max_temp_lost_count: 25
 outpost_max_temp_lost_count: 75
 
