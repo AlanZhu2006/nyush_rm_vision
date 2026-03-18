@@ -1,7 +1,10 @@
 #ifndef AUTO_AIM_MULTITHREAD__HPP
 #define AUTO_AIM_MULTITHREAD__HPP
 
+#include <condition_variable>
+#include <mutex>
 #include <optional>
+#include <thread>
 
 #include "io/cboard.hpp"
 #include "tasks/auto_aim/shooter.hpp"
@@ -73,7 +76,12 @@ private:
     while (!stop_) {
       std::optional<Input> input;
       {
-        std::lock_guard<std::mutex> lock(mtx_);
+        std::unique_lock<std::mutex> lock(mtx_);
+        cv_.wait_for(lock, std::chrono::milliseconds(2),
+                     [this] { return stop_ || latest_.has_value(); });
+        if (stop_) {
+          break;
+        }
         if (latest_ && tools::delta_time(std::chrono::steady_clock::now(), latest_->t) < 0.2) {
           input = latest_;
         } else
@@ -98,7 +106,6 @@ private:
           plotter_.plot(data);
         }
       }
-      std::this_thread::sleep_for(std::chrono::milliseconds(2));  //approximately 500Hz
     }
   }
 };

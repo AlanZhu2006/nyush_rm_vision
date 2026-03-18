@@ -42,12 +42,12 @@ private:
   YOLO yolo_;
 
   tools::ThreadSafeQueue<
-    std::tuple<cv::Mat, std::chrono::steady_clock::time_point, ov::InferRequest>>
-    queue_{16, [] { tools::logger()->debug("[MultiThreadDetector] queue is full!"); }};
+    std::tuple<cv::Mat, std::chrono::steady_clock::time_point, ov::InferRequest>, true>
+    queue_{6, [] { tools::logger()->debug("[MultiThreadDetector] queue is full, drop oldest"); }};
 
   tools::ThreadSafeQueue<
-    std::tuple<cv::Mat, std::chrono::steady_clock::time_point, std::vector<float>>>
-    trt_queue_{16, [] { tools::logger()->debug("[MultiThreadDetector] trt queue is full!"); }};
+    std::tuple<cv::Mat, std::chrono::steady_clock::time_point, std::vector<float>>, true>
+    trt_queue_{6, [] { tools::logger()->debug("[MultiThreadDetector] trt queue is full, drop oldest"); }};
 };
 
 }  // namespace multithread
