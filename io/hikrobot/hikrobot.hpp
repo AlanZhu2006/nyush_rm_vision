@@ -34,6 +34,8 @@ private:
   std::atomic<bool> daemon_quit_;
 
   void * handle_;
+  bool device_opened_;
+  bool grabbing_started_;
   std::thread capture_thread_;
   std::atomic<bool> capturing_;
   std::atomic<bool> capture_quit_;
@@ -43,12 +45,13 @@ private:
 
   void capture_start();
   void capture_stop();
+  void release_handle();
 
   void set_float_value(const std::string & name, double value);
   void set_enum_value(const std::string & name, unsigned int value);
 
   void set_vid_pid(const std::string & vid_pid);
-  void reset_usb() const;
+  bool reset_usb() const;
 };
 
 }  // namespace io

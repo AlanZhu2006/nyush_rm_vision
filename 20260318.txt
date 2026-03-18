@@ -1,0 +1,79 @@
+I found two separate problems.
+- The Hik camera is visible on USB as 2bdf:0001, so this is not a cable / VID:PID mismatch.
+- But there are 4 stale camera_test processes still holding /dev/bus/usb/003/004, which can make MV_CC_EnumDevices fail with 0x80000006 (MV_E_RESOURCE).
+- The follow-up MV_CC_StopGrabbing failed: 0x80000000 is a code bug: after startup failed, the driver still tried to stop grabbing on an invalid handle.
+I fixed the HikRobot cleanup/retry path.
+- io/hikrobot/hikrobot.hpp:36 adds explicit open/grabbing state instead of relying on uninitialized members.
+- io/hikrobot/hikrobot.cpp:13 now initializes handle_, capturing_, and related state safely.
+- io/hikrobot/hikrobot.cpp:66 zero-initializes the SDK device list and cleans up partial open failures.
+- io/hikrobot/hikrobot.cpp:177 adds release_handle() so failed starts destroy the handle cleanly instead of calling MV_CC_StopGrabbing on garbage.
+- io/hikrobot/hikrobot.cpp:40 and io/hikrobot/hikrobot.cpp:258 make USB reset return success/failure and wait 1s after a successful reset, so the code stops hammering the camera immediately after reset.
+I verified the code builds with just build camera_test.
+I did not rerun the live camera test because those stale camera_test processes are still holding the device, so a new run would still contend with them.
+1. Stop the stale processes with pkill -f './build/camera_test', then confirm lsof /dev/bus/usb/003/004 is empty, and rerun just test camera.
+2. If MV_CC_EnumDevices still returns 0x80000006 after that, the next thing I’d check is SDK mismatch: the binary is loading the repo-bundled io/hikrobot/lib/amd64/libMvCameraControl.so rather than the installed MVS copy in /opt/MVS/lib/64.
+▣  Build · gpt-5.4 · 7m 59s
+
+---
+
+Tracked it down to the Hik SDK library, not the camera.
+- A direct SDK check showed the repo-bundled libMvCameraControl.so returned 0x80000006, while the installed MVS library at /opt/MVS/lib/64/libMvCameraControl.so.4.7.0.3 returned MV_OK and saw 1 device.
+- I updated just launchers so just test ..., just run ..., and just calibrate capture ... automatically preload the working MVS library: justfile:136, justfile:192, justfile:276.
+- I also hardened Hik startup/cleanup in io/hikrobot/hikrobot.hpp:36 and io/hikrobot/hikrobot.cpp:13, enabled continuous acquisition / trigger-off in io/hikrobot/hikrobot.cpp:102, and stopped treating MV_E_NODATA as a fatal camera reset in io/hikrobot/hikrobot.cpp:134.
+- I rebuilt camera_test and verified with timeout 6s just test camera: it now detects the camera, logs camera resolution: 3072x2048, and streams frames.
+What changed for you:
+- just test camera should now work directly.
+- If you run the binary manually, use just or preload the system SDK yourself, because ./build/camera_test alone still resolves the repo-bundled Hik lib.
+If you want, I can also tune the Hik config next — the current stream is only about 6 FPS at 3072x2048, so the next likely step is reducing resolution / adjusting camera node settings.
+
+---
+
+我这次主要做了两类修复：一类是把运行时切到可用的 Hik MVS SDK，另一类是把 HikRobot 相机驱动的打开/关闭/取流逻辑补稳。根因不是相机没插好，而是程序默认加载了仓库里那份 Hik SDK，它对这台相机枚举直接返回 0x80000006；系统安装在 /opt/MVS 的 SDK 则能正常识别。
+定位结果
+- camera_test 的 RUNPATH 会优先加载仓库自带的 io/hikrobot/lib/amd64/libMvCameraControl.so，不是 /opt/MVS 那份系统 SDK。
+- 我直接分别用两份库调用 MV_CC_EnumDevices 做了对比：仓库库返回 0x80000006，系统库返回 MV_OK 且能看到 1 台设备。
+- 另外原来的相机代码在启动失败后还会对无效句柄调用 MV_CC_StopGrabbing，所以你之前还会看到 0x80000000 这类“无效句柄”警告。
+我改的文件
+- justfile:137
+- justfile:193
+- justfile:277
+- io/hikrobot/hikrobot.hpp:36
+- io/hikrobot/hikrobot.cpp:13
+运行时 SDK 修复
+- 在 justfile:137、justfile:193、justfile:277 里，我给 just run ...、just test ...、just calibrate capture ... 加了自动运行时注入：
+  - 自动寻找 /opt/MVS/lib/64/libMvCameraControl.so*
+  - 启动时设置 LD_PRELOAD
+  - 同时设置 MVCAM_COMMON_RUNENV=/opt/MVS/lib
+- 这样做的原因是：这是最小改动，能直接修掉“默认加载坏 SDK”的问题，而且不需要重构整套 CMake 链接逻辑。
+- 结果就是：以后你走 just test camera、just run mt、just run standard 这类入口时，会优先使用系统里可用的 Hik SDK。
+HikRobot 生命周期修复
+- 在 io/hikrobot/hikrobot.hpp:36 里新增了 device_opened_、grabbing_started_ 和 release_handle()，并让 reset_usb() 返回 bool。
+- 在 io/hikrobot/hikrobot.cpp:13 里把 handle_、capturing_、capture_quit_ 等状态显式初始化。
+- 在 io/hikrobot/hikrobot.cpp:66 附近，启动流程现在会：
+  - 对 MV_CC_DEVICE_INFO_LIST 做零初始化
+  - 在 OpenDevice / StartGrabbing 失败时释放已创建的句柄
+  - 只在真正开始抓流后才执行 StopGrabbing
+- 这样修的目的，是避免“启动半成功、清理半失败”的未定义状态，解决你日志里的无效句柄告警。
+取流逻辑修复
+- 在 io/hikrobot/hikrobot.cpp:102 附近，我显式设置了：
+  - AcquisitionMode = Continuous
+  - TriggerMode = Off
+- 这一步是为了明确告诉 Hik 相机按连续采集模式出流，避免 SDK 切正确后仍因为采集模式不明确而一直拿不到帧。
+- 在 io/hikrobot/hikrobot.cpp:119 附近，我把 MV_E_NODATA 改成“超时但不中断”的处理：
+  - 以前一旦短暂超时就直接退出抓流线程，然后守护线程重置 USB，造成反复重连
+  - 现在把它当成暂时没帧，只在连续超时很多次时才打警告
+- 同时保留了 USB reset 后等待 1 秒再重试，避免刚 reset 完就立刻重连。
+验证结果
+- just build camera_test 已通过。
+- 我用 timeout 6s just test camera 验证过，命令能正常进入取流，看到：
+  - 相机分辨率 3072x2048
+  - 稳定输出帧率日志，约 6 fps
+- 最后出现的 signal 15 是我用 timeout 主动结束测试，不是程序崩了。
+没改的东西
+- 我没有改你的 configs/odin.yaml。
+- 我没有动你仓库里其他已有的未提交改动，只改了 justfile 和 io/hikrobot/*。
+现在你需要知道的行为
+- 以后优先用 just test camera，它现在会自动走系统 MVS SDK。
+- 如果你手动直接跑 ./build/camera_test，它仍可能因为 RUNPATH 先吃到仓库自带的旧库而复现原问题；除非你手动加和 just 一样的 LD_PRELOAD。
+1. 如果你愿意，我下一步可以继续帮你把 6 fps 优化到更合理的值。
+2. 我也可以把“优先使用系统 Hik SDK”进一步固化到 CMake，让手动运行二进制时也不需要 LD_PRELOAD。

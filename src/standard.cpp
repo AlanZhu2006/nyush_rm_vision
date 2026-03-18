@@ -76,7 +76,7 @@ int main(int argc, char * argv[])
 
     solver.set_R_gimbal2world(q);
 
-    auto armors = detector.detect(img);
+    // auto armors = detector.detect(img);
 
     auto targets = tracker.track(armors, t);
 
@@ -84,6 +84,7 @@ int main(int argc, char * argv[])
 
     cboard.send(command);
   }
-
+});
+if (detect_thread.joinable()) detect_thread.join();
   return 0;
 }

@@ -2,6 +2,8 @@
 
 #include <libusb-1.0/libusb.h>
 
+#include <unordered_map>
+
 #include "tools/logger.hpp"
 
 using namespace std::chrono_literals;
@@ -9,7 +11,17 @@ using namespace std::chrono_literals;
 namespace io
 {
 HikRobot::HikRobot(double exposure_ms, double gain, const std::string & vid_pid)
-: exposure_us_(exposure_ms * 1e3), gain_(gain), queue_(1), daemon_quit_(false), vid_(-1), pid_(-1)
+: exposure_us_(exposure_ms * 1e3),
+  gain_(gain),
+  daemon_quit_(false),
+  handle_(nullptr),
+  device_opened_(false),
+  grabbing_started_(false),
+  capturing_(false),
+  capture_quit_(false),
+  queue_(1),
+  vid_(-1),
+  pid_(-1)
 {
   set_vid_pid(vid_pid);
   if (libusb_init(NULL)) tools::logger()->warn("Unable to init libusb!");
@@ -25,7 +37,7 @@ HikRobot::HikRobot(double exposure_ms, double gain, const std::string & vid_pid)
       if (capturing_) continue;
 
       capture_stop();
-      reset_usb();
+      if (reset_usb()) std::this_thread::sleep_for(1s);
       capture_start();
     }
 
@@ -55,10 +67,13 @@ void HikRobot::capture_start()
 {
   capturing_ = false;
   capture_quit_ = false;
+  handle_ = nullptr;
+  device_opened_ = false;
+  grabbing_started_ = false;
 
   unsigned int ret;
 
-  MV_CC_DEVICE_INFO_LIST device_list;
+  MV_CC_DEVICE_INFO_LIST device_list{};
   ret = MV_CC_EnumDevices(MV_USB_DEVICE, &device_list);
   if (ret != MV_OK) {
     tools::logger()->warn("MV_CC_EnumDevices failed: {:#x}", ret);
@@ -79,10 +94,14 @@ void HikRobot::capture_start()
   ret = MV_CC_OpenDevice(handle_);
   if (ret != MV_OK) {
     tools::logger()->warn("MV_CC_OpenDevice failed: {:#x}", ret);
+    release_handle();
     return;
   }
+  device_opened_ = true;
 
   set_enum_value("BalanceWhiteAuto", MV_BALANCEWHITE_AUTO_CONTINUOUS);
+  set_enum_value("AcquisitionMode", MV_ACQ_MODE_CONTINUOUS);
+  set_enum_value("TriggerMode", MV_TRIGGER_MODE_OFF);
   set_enum_value("ExposureAuto", MV_EXPOSURE_AUTO_MODE_OFF);
   set_enum_value("GainAuto", MV_GAIN_MODE_OFF);
   set_float_value("ExposureTime", exposure_us_);
@@ -92,13 +111,16 @@ void HikRobot::capture_start()
   ret = MV_CC_StartGrabbing(handle_);
   if (ret != MV_OK) {
     tools::logger()->warn("MV_CC_StartGrabbing failed: {:#x}", ret);
+    release_handle();
     return;
   }
+  grabbing_started_ = true;
 
   capture_thread_ = std::thread{[this] {
     tools::logger()->info("HikRobot's capture thread started.");
 
     capturing_ = true;
+    unsigned int no_data_count = 0;
 
     MV_FRAME_OUT raw;
     MV_CC_PIXEL_CONVERT_PARAM cvt_param;
@@ -110,10 +132,19 @@ void HikRobot::capture_start()
       unsigned int nMsec = 100;
 
       ret = MV_CC_GetImageBuffer(handle_, &raw, nMsec);
+      if (ret == MV_E_NODATA) {
+        ++no_data_count;
+        if (no_data_count % 50 == 0) {
+          tools::logger()->warn("MV_CC_GetImageBuffer timed out {} times", no_data_count);
+        }
+        continue;
+      }
+
       if (ret != MV_OK) {
         tools::logger()->warn("MV_CC_GetImageBuffer failed: {:#x}", ret);
         break;
       }
+      no_data_count = 0;
 
       auto timestamp = std::chrono::steady_clock::now();
       cv::Mat img(cv::Size(raw.stFrameInfo.nWidth, raw.stFrameInfo.nHeight), CV_8U, raw.pBufAddr);
@@ -160,25 +191,37 @@ void HikRobot::capture_stop()
   capture_quit_ = true;
   if (capture_thread_.joinable()) capture_thread_.join();
 
+  release_handle();
+}
+
+void HikRobot::release_handle()
+{
+  if (!handle_) return;
+
   unsigned int ret;
 
-  ret = MV_CC_StopGrabbing(handle_);
-  if (ret != MV_OK) {
-    tools::logger()->warn("MV_CC_StopGrabbing failed: {:#x}", ret);
-    return;
+  if (grabbing_started_) {
+    ret = MV_CC_StopGrabbing(handle_);
+    if (ret != MV_OK) {
+      tools::logger()->warn("MV_CC_StopGrabbing failed: {:#x}", ret);
+    }
+    grabbing_started_ = false;
   }
 
-  ret = MV_CC_CloseDevice(handle_);
-  if (ret != MV_OK) {
-    tools::logger()->warn("MV_CC_CloseDevice failed: {:#x}", ret);
-    return;
+  if (device_opened_) {
+    ret = MV_CC_CloseDevice(handle_);
+    if (ret != MV_OK) {
+      tools::logger()->warn("MV_CC_CloseDevice failed: {:#x}", ret);
+    }
+    device_opened_ = false;
   }
 
   ret = MV_CC_DestroyHandle(handle_);
   if (ret != MV_OK) {
     tools::logger()->warn("MV_CC_DestroyHandle failed: {:#x}", ret);
-    return;
   }
+
+  handle_ = nullptr;
 }
 
 void HikRobot::set_float_value(const std::string & name, double value)
@@ -224,23 +267,27 @@ void HikRobot::set_vid_pid(const std::string & vid_pid)
   }
 }
 
-void HikRobot::reset_usb() const
+bool HikRobot::reset_usb() const
 {
-  if (vid_ == -1 || pid_ == -1) return;
+  if (vid_ == -1 || pid_ == -1) return false;
 
   // https://github.com/ralight/usb-reset/blob/master/usb-reset.c
   auto handle = libusb_open_device_with_vid_pid(NULL, vid_, pid_);
   if (!handle) {
     tools::logger()->warn("Unable to open usb!");
-    return;
+    return false;
   }
 
-  if (libusb_reset_device(handle))
+  bool ok = true;
+  if (libusb_reset_device(handle)) {
     tools::logger()->warn("Unable to reset usb!");
-  else
+    ok = false;
+  } else {
     tools::logger()->info("Reset usb successfully :)");
+  }
 
   libusb_close(handle);
+  return ok;
 }
 
 }  // namespace io

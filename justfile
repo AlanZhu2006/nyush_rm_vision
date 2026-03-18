@@ -10,7 +10,7 @@ default_calib_config := "configs/calibration.yaml"
 default_calib_folder := "assets/img_with_q"
 default_jobs := `nproc`
 default_profile := "Release"
-default_use_tensorrt := "ON"
+default_use_tensorrt := "OFF"
 default_openvino_dir := ""
 
 # Configure project (auto picks OpenVINO_DIR if available).
@@ -134,7 +134,7 @@ clean build_dir=default_build_dir:
 
 # Unified runtime launcher. See `just run-help` for detailed usage.
 run name="mt" arg="" arg2="" arg3="" config=default_config build_dir=default_build_dir amp="" signal="triangle_wave":
-  @cfg="{{config}}"; a="{{amp}}"; sig="{{signal}}"; \
+  @cfg="{{config}}"; a="{{amp}}"; sig="{{signal}}"; mvs_lib=""; mvs_runenv="${MVCAM_COMMON_RUNENV:-/opt/MVS/lib}"; \
   for token in "{{arg}}" "{{arg2}}" "{{arg3}}"; do \
     if [[ -z "${token}" ]]; then \
       continue; \
@@ -146,11 +146,24 @@ run name="mt" arg="" arg2="" arg3="" config=default_config build_dir=default_bui
       cfg="${token}"; \
     fi; \
   done; \
+  for candidate in /opt/MVS/lib/64/libMvCameraControl.so*; do \
+    if [[ -f "${candidate}" ]]; then \
+      mvs_lib="${candidate}"; \
+      break; \
+    fi; \
+  done; \
+  run_command() { \
+    if [[ -n "${mvs_lib}" ]]; then \
+      env LD_PRELOAD="${mvs_lib}${LD_PRELOAD:+:${LD_PRELOAD}}" MVCAM_COMMON_RUNENV="${mvs_runenv}" "$@"; \
+    else \
+      "$@"; \
+    fi; \
+  }; \
   case "{{name}}" in \
-    standard) ./{{build_dir}}/standard "${cfg}" ;; \
-    mt) ./{{build_dir}}/mt_standard "${cfg}" ;; \
-    response-yaw) if [[ -z "${a}" ]]; then a="3"; fi; ./{{build_dir}}/gimbal_response_test -a "${a}" -m "${sig}" -x yaw "${cfg}" ;; \
-    response-pitch) if [[ -z "${a}" ]]; then a="2"; fi; ./{{build_dir}}/gimbal_response_test -a "${a}" -m "${sig}" -x pitch "${cfg}" ;; \
+    standard) run_command ./{{build_dir}}/standard "${cfg}" ;; \
+    mt) run_command ./{{build_dir}}/mt_standard "${cfg}" ;; \
+    response-yaw) if [[ -z "${a}" ]]; then a="3"; fi; run_command ./{{build_dir}}/gimbal_response_test -a "${a}" -m "${sig}" -x yaw "${cfg}" ;; \
+    response-pitch) if [[ -z "${a}" ]]; then a="2"; fi; run_command ./{{build_dir}}/gimbal_response_test -a "${a}" -m "${sig}" -x pitch "${cfg}" ;; \
     *) echo "[run] Unknown run target '{{name}}'. Supported: standard, mt, response-yaw, response-pitch. See: just run-help" >&2; exit 1 ;; \
   esac
 
@@ -177,7 +190,7 @@ run-help:
 
 # Unified calibration launcher. See `just calibrate-help` for detailed usage.
 calibrate name="capture" arg="" arg2="" arg3="" arg4="" arg5="" arg6="" build_dir=default_build_dir config=default_calib_config input_folder=default_calib_folder output_folder=default_calib_folder:
-  @cfg="{{config}}"; in_folder="{{input_folder}}"; out_folder="{{output_folder}}"; cli_mode="false"; in_path=""; out_path=""; start=""; end=""; \
+  @cfg="{{config}}"; in_folder="{{input_folder}}"; out_folder="{{output_folder}}"; cli_mode="false"; in_path=""; out_path=""; start=""; end=""; mvs_lib=""; mvs_runenv="${MVCAM_COMMON_RUNENV:-/opt/MVS/lib}"; \
   for token in "{{arg}}" "{{arg2}}" "{{arg3}}" "{{arg4}}" "{{arg5}}" "{{arg6}}"; do \
     if [[ -z "${token}" ]]; then \
       continue; \
@@ -199,12 +212,25 @@ calibrate name="capture" arg="" arg2="" arg3="" arg4="" arg5="" arg6="" build_di
       cli_mode="true"; \
     fi; \
   done; \
+  for candidate in /opt/MVS/lib/64/libMvCameraControl.so*; do \
+    if [[ -f "${candidate}" ]]; then \
+      mvs_lib="${candidate}"; \
+      break; \
+    fi; \
+  done; \
+  run_command() { \
+    if [[ -n "${mvs_lib}" ]]; then \
+      env LD_PRELOAD="${mvs_lib}${LD_PRELOAD:+:${LD_PRELOAD}}" MVCAM_COMMON_RUNENV="${mvs_runenv}" "$@"; \
+    else \
+      "$@"; \
+    fi; \
+  }; \
   case "{{name}}" in \
     capture) \
       if [[ "${cli_mode}" == "true" ]]; then \
-        ./{{build_dir}}/capture "${cfg}" --output-folder="${out_folder}" --cli-mode; \
+        run_command ./{{build_dir}}/capture "${cfg}" --output-folder="${out_folder}" --cli-mode; \
       else \
-        ./{{build_dir}}/capture "${cfg}" --output-folder="${out_folder}"; \
+        run_command ./{{build_dir}}/capture "${cfg}" --output-folder="${out_folder}"; \
       fi ;; \
     camera) ./{{build_dir}}/calibrate_camera "${in_folder}" --config-path="${cfg}" ;; \
     handeye) ./{{build_dir}}/calibrate_handeye "${in_folder}" --config-path="${cfg}" ;; \
@@ -261,7 +287,7 @@ calibrate-help:
 
 # Unified test launcher. See `just test-help` for detailed usage.
 test name="imu" arg="" arg2="" arg3="" arg4="" config=default_config build_dir=default_build_dir jobs=default_jobs:
-  @cfg="{{config}}"; display="false"; send="false"; fire="false"; use_web="false"; web_port="8888"; gimbal_opts=""; local_display=""; local_xauth=""; test_target=""; test_use_tensorrt="{{default_use_tensorrt}}"; \
+  @cfg="{{config}}"; display="false"; send="false"; fire="false"; use_web="false"; web_port="8888"; gimbal_opts=""; local_display=""; local_xauth=""; test_target=""; test_use_tensorrt="{{default_use_tensorrt}}"; mvs_lib=""; mvs_runenv="${MVCAM_COMMON_RUNENV:-/opt/MVS/lib}"; \
   for token in "{{arg}}" "{{arg2}}" "{{arg3}}" "{{arg4}}"; do \
     if [[ -z "${token}" ]]; then \
       continue; \
@@ -302,20 +328,36 @@ test name="imu" arg="" arg2="" arg3="" arg4="" config=default_config build_dir=d
       cfg="${token}"; \
     fi; \
   done; \
+  for candidate in /opt/MVS/lib/64/libMvCameraControl.so*; do \
+    if [[ -f "${candidate}" ]]; then \
+      mvs_lib="${candidate}"; \
+      break; \
+    fi; \
+  done; \
   if [[ -n "${local_display}" && -z "${local_xauth}" ]]; then \
     local_xauth="${HOME}/.Xauthority"; \
   fi; \
   case "{{name}}" in \
     imu) test_target="imu_communication_test" ;; \
     camera) test_target="camera_test" ;; \
-    detect) test_target="auto_aim_camera_test"; test_use_tensorrt="ON" ;; \
+    detect) test_target="auto_aim_camera_test"; test_use_tensorrt="OFF" ;; \
     gimbal) test_target="gimbal_test" ;; \
     *) echo "[test] Unknown test '{{name}}'. Supported: imu, camera, detect, gimbal. See: just test-help" >&2; exit 1 ;; \
   esac; \
   just ensure-configured "{{build_dir}}" "{{default_profile}}" "${test_use_tensorrt}" "{{default_openvino_dir}}"; \
   command cmake --build "{{build_dir}}" --target "${test_target}" -j{{jobs}}; \
   run_with_display() { \
-    if [[ -n "${local_display}" ]]; then \
+    if [[ -n "${mvs_lib}" ]]; then \
+      if [[ -n "${local_display}" ]]; then \
+        if [[ -n "${local_xauth}" ]]; then \
+          env LD_PRELOAD="${mvs_lib}${LD_PRELOAD:+:${LD_PRELOAD}}" MVCAM_COMMON_RUNENV="${mvs_runenv}" DISPLAY="${local_display}" XAUTHORITY="${local_xauth}" "$@"; \
+        else \
+          env LD_PRELOAD="${mvs_lib}${LD_PRELOAD:+:${LD_PRELOAD}}" MVCAM_COMMON_RUNENV="${mvs_runenv}" DISPLAY="${local_display}" "$@"; \
+        fi; \
+      else \
+        env LD_PRELOAD="${mvs_lib}${LD_PRELOAD:+:${LD_PRELOAD}}" MVCAM_COMMON_RUNENV="${mvs_runenv}" "$@"; \
+      fi; \
+    elif [[ -n "${local_display}" ]]; then \
       if [[ -n "${local_xauth}" ]]; then \
         env DISPLAY="${local_display}" XAUTHORITY="${local_xauth}" "$@"; \
       else \
