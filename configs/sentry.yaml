@@ -42,6 +42,12 @@ camera_name: "hikrobot"
 exposure_ms: 3.0
 gain: 16.0
 vid_pid: "2bdf:0001"
+camera_preprocess:
+  enabled: true
+  crop_width: 2560
+  crop_height: 2048
+  output_width: 1280
+  output_height: 1024
 
 #####-----传统方法参数-----#####
 threshold: 150

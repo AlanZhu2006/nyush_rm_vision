@@ -48,8 +48,16 @@ Tracker::Tracker(const std::string & config_path, Solver & solver)
   min_detect_count_ = yaml["min_detect_count"].as<int>();
   max_temp_lost_count_ = yaml["max_temp_lost_count"].as<int>();
   outpost_max_temp_lost_count_ = yaml["outpost_max_temp_lost_count"].as<int>();
-  if (yaml["image_width"]) image_width_ = yaml["image_width"].as<int>();
-  if (yaml["image_height"]) image_height_ = yaml["image_height"].as<int>();
+  if (
+    yaml["camera_preprocess"] && yaml["camera_preprocess"]["enabled"] &&
+    yaml["camera_preprocess"]["enabled"].as<bool>()) {
+    auto preprocess = yaml["camera_preprocess"];
+    if (preprocess["output_width"]) image_width_ = preprocess["output_width"].as<int>();
+    if (preprocess["output_height"]) image_height_ = preprocess["output_height"].as<int>();
+  }
+
+  if (image_width_ == 0 && yaml["image_width"]) image_width_ = yaml["image_width"].as<int>();
+  if (image_height_ == 0 && yaml["image_height"]) image_height_ = yaml["image_height"].as<int>();
   normal_temp_lost_count_ = max_temp_lost_count_;
 }
 
