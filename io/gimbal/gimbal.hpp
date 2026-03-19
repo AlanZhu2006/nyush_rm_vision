@@ -102,9 +102,19 @@ public:
 
   // 公共成员变量（CBoard兼容）
   double bullet_speed = 0.0;  // 实时更新
-  Mode mode_cboard = idle;     // CBoard风格的mode
+  Mode mode_cboard = idle;    // CBoard风格的mode
 
 private:
+  struct ProtocolAdapterConfig
+  {
+    bool enabled = false;
+    int rx_yaw_sign = 1;
+    int rx_pitch_sign = 1;
+    int rx_roll_sign = 1;
+    int tx_yaw_sign = 1;
+    int tx_pitch_sign = 1;
+  };
+
   serial::Serial serial_;
 
   std::thread thread_;
@@ -116,10 +126,13 @@ private:
 
   GimbalMode mode_ = GimbalMode::IDLE;
   GimbalState state_;
+  ProtocolAdapterConfig adapter_;
   tools::ThreadSafeQueue<std::tuple<Eigen::Quaterniond, std::chrono::steady_clock::time_point>>
     queue_{1000};
 
   bool read(uint8_t * buffer, size_t size);
+  VisionToGimbal adapt_tx(const VisionToGimbal & packet) const;
+  Eigen::Quaterniond adapt_rx_quaternion(const Eigen::Quaterniond & q) const;
   void read_thread();
   void reconnect();
 };

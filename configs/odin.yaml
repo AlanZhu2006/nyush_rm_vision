@@ -93,3 +93,22 @@ R_camera2gimbal: [-0.045240171459768774, 0.04292524238096157, 0.9980534807578331
 t_camera2gimbal: [0, 0, 0]
 
 com_port: "/dev/gimbal"
+
+# Protocol-edge sign adapter for io::Gimbal.
+# Odin currently targets nyush-rm-control/refactor-yaw-direction numeric behavior.
+gimbal_protocol_adapter:
+  enabled: true
+  rx_yaw_sign: -1
+  rx_pitch_sign: 1
+  rx_roll_sign: 1
+  tx_yaw_sign: -1
+  tx_pitch_sign: 1
+
+# Example for nyush-rm-control/refactor-yaw-direction current numeric behavior:
+# gimbal_protocol_adapter:
+#   enabled: true
+#   rx_yaw_sign: -1
+#   rx_pitch_sign: 1
+#   rx_roll_sign: 1
+#   tx_yaw_sign: -1
+#   tx_pitch_sign: 1
