@@ -23,9 +23,7 @@ Camera::Camera(const std::string & config_path)
   else if (camera_name == "hikrobot") {
     auto gain = tools::read<double>(yaml, "gain");
     auto vid_pid = tools::read<std::string>(yaml, "vid_pid");
-    auto image_width = yaml["image_width"] ? yaml["image_width"].as<int>() : 0;
-    auto image_height = yaml["image_height"] ? yaml["image_height"].as<int>() : 0;
-    camera_ = std::make_unique<HikRobot>(exposure_ms, gain, vid_pid, image_width, image_height);
+    camera_ = std::make_unique<HikRobot>(exposure_ms, gain, vid_pid);
   }
 
   else {

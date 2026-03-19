@@ -10,12 +10,9 @@ using namespace std::chrono_literals;
 
 namespace io
 {
-HikRobot::HikRobot(
-  double exposure_ms, double gain, const std::string & vid_pid, int image_width, int image_height)
+HikRobot::HikRobot(double exposure_ms, double gain, const std::string & vid_pid)
 : exposure_us_(exposure_ms * 1e3),
   gain_(gain),
-  image_width_(image_width),
-  image_height_(image_height),
   daemon_quit_(false),
   handle_(nullptr),
   device_opened_(false),
@@ -107,8 +104,6 @@ void HikRobot::capture_start()
   set_enum_value("TriggerMode", MV_TRIGGER_MODE_OFF);
   set_enum_value("ExposureAuto", MV_EXPOSURE_AUTO_MODE_OFF);
   set_enum_value("GainAuto", MV_GAIN_MODE_OFF);
-  if (image_width_ > 0) set_int_value("Width", image_width_);
-  if (image_height_ > 0) set_int_value("Height", image_height_);
   set_float_value("ExposureTime", exposure_us_);
   set_float_value("Gain", gain_);
   MV_CC_SetFrameRate(handle_, 150);
@@ -237,18 +232,6 @@ void HikRobot::set_float_value(const std::string & name, double value)
 
   if (ret != MV_OK) {
     tools::logger()->warn("MV_CC_SetFloatValue(\"{}\", {}) failed: {:#x}", name, value, ret);
-    return;
-  }
-}
-
-void HikRobot::set_int_value(const std::string & name, int64_t value)
-{
-  unsigned int ret;
-
-  ret = MV_CC_SetIntValueEx(handle_, name.c_str(), value);
-
-  if (ret != MV_OK) {
-    tools::logger()->warn("MV_CC_SetIntValueEx(\"{}\", {}) failed: {:#x}", name, value, ret);
     return;
   }
 }
