@@ -94,14 +94,14 @@ t_camera2gimbal: [0, 0, 0]
 
 com_port: "/dev/gimbal"
 
-# Optional protocol-edge sign adapter for io::Gimbal.
-# Keep disabled for legacy nyush-rm-control main semantics.
+# Protocol-edge sign adapter for io::Gimbal.
+# Odin currently targets nyush-rm-control/refactor-yaw-direction numeric behavior.
 gimbal_protocol_adapter:
-  enabled: false
-  rx_yaw_sign: 1
+  enabled: true
+  rx_yaw_sign: -1
   rx_pitch_sign: 1
   rx_roll_sign: 1
-  tx_yaw_sign: 1
+  tx_yaw_sign: -1
   tx_pitch_sign: 1
 
 # Example for nyush-rm-control/refactor-yaw-direction current numeric behavior:
