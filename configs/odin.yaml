@@ -99,10 +99,10 @@ com_port: "/dev/gimbal"
 gimbal_protocol_adapter:
   enabled: true
   rx_yaw_sign: -1
-  rx_pitch_sign: 1
+  rx_pitch_sign: -1
   rx_roll_sign: 1
   tx_yaw_sign: -1
-  tx_pitch_sign: 1
+  tx_pitch_sign: -1
 
 # Example for nyush-rm-control/refactor-yaw-direction current numeric behavior:
 # gimbal_protocol_adapter:

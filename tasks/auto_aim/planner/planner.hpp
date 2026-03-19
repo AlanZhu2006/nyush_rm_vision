@@ -44,6 +44,8 @@ private:
   double pitch_offset_;
   double fire_thresh_;
   double low_speed_delay_time_, high_speed_delay_time_, decision_speed_;
+  double aim_switch_hysteresis_m_;
+  int aim_lock_id_ = -1;
 
   TinySolver * yaw_solver_;
   TinySolver * pitch_solver_;
@@ -51,8 +53,9 @@ private:
   void setup_yaw_solver(const std::string & config_path);
   void setup_pitch_solver(const std::string & config_path);
 
-  Eigen::Matrix<double, 2, 1> aim(const Target & target, double bullet_speed);
-  Trajectory get_trajectory(Target & target, double yaw0, double bullet_speed);
+  Eigen::Vector4d select_aim_point(const Target & target, int & lock_id);
+  Eigen::Matrix<double, 2, 1> aim(const Target & target, double bullet_speed, int & lock_id);
+  Trajectory get_trajectory(Target & target, double yaw0, double bullet_speed, int lock_id);
 };
 
 }  // namespace auto_aim

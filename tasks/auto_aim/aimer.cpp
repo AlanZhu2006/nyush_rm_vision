@@ -2,6 +2,7 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include <algorithm>
 #include <cmath>
 #include <vector>
 
@@ -12,11 +13,24 @@
 namespace auto_aim
 {
 Aimer::Aimer(const std::string & config_path)
-: left_yaw_offset_(std::nullopt), right_yaw_offset_(std::nullopt)
+: left_yaw_offset_(std::nullopt),
+  right_yaw_offset_(std::nullopt),
+  pitch_lpf_alpha_(0.35),
+  pitch_max_rate_(6.0),
+  pitch_filter_initialized_(false),
+  pitch_filtered_(0.0)
 {
   auto yaml = YAML::LoadFile(config_path);
   yaw_offset_ = yaml["yaw_offset"].as<double>() / 57.3;        // degree to rad
   pitch_offset_ = yaml["pitch_offset"].as<double>() / 57.3;    // degree to rad
+  if (yaml["pitch_lpf_alpha"]) {
+    pitch_lpf_alpha_ = yaml["pitch_lpf_alpha"].as<double>();
+  }
+  if (yaml["pitch_max_rate"]) {
+    pitch_max_rate_ = yaml["pitch_max_rate"].as<double>();
+  }
+  pitch_lpf_alpha_ = tools::limit_min_max(pitch_lpf_alpha_, 0.0, 1.0);
+  pitch_max_rate_ = std::max(0.0, pitch_max_rate_);
   comming_angle_ = yaml["comming_angle"].as<double>() / 57.3;  // degree to rad
   leaving_angle_ = yaml["leaving_angle"].as<double>() / 57.3;  // degree to rad
   high_speed_delay_time_ = yaml["high_speed_delay_time"].as<double>();
@@ -33,7 +47,10 @@ io::Command Aimer::aim(
   std::list<Target> targets, std::chrono::steady_clock::time_point timestamp, double bullet_speed,
   bool to_now)
 {
-  if (targets.empty()) return {false, false, 0, 0};
+  if (targets.empty()) {
+    pitch_filter_initialized_ = false;
+    return {false, false, 0, 0};
+  }
   auto target = targets.front();
 
   auto ekf = target.ekf();
@@ -62,6 +79,7 @@ io::Command Aimer::aim(
   debug_aim_point = aim_point0;
   if (!aim_point0.valid) {
     // tools::logger()->debug("Invalid aim_point0.");
+    pitch_filter_initialized_ = false;
     return {false, false, 0, 0};
   }
 
@@ -72,6 +90,7 @@ io::Command Aimer::aim(
     tools::logger()->debug(
       "[Aimer] Unsolvable trajectory0: {:.2f} {:.2f} {:.2f}", bullet_speed, d0, xyz0[2]);
     debug_aim_point.valid = false;
+    pitch_filter_initialized_ = false;
     return {false, false, 0, 0};
   }
 
@@ -90,6 +109,7 @@ io::Command Aimer::aim(
     auto aim_point = choose_aim_point(iteration_target[iter]);
     debug_aim_point = aim_point;
     if (!aim_point.valid) {
+      pitch_filter_initialized_ = false;
       return {false, false, 0, 0};
     }
 
@@ -104,6 +124,7 @@ io::Command Aimer::aim(
         "[Aimer] Unsolvable trajectory in iter {}: speed={:.2f}, d={:.2f}, z={:.2f}", iter + 1,
         bullet_speed, d, xyz.z());
       debug_aim_point.valid = false;
+      pitch_filter_initialized_ = false;
       return {false, false, 0, 0};
     }
 
@@ -119,6 +140,7 @@ io::Command Aimer::aim(
   Eigen::Vector3d final_xyz = debug_aim_point.xyza.head(3);
   double yaw = std::atan2(final_xyz.y(), final_xyz.x()) + yaw_offset_;
   double pitch = -(current_traj.pitch + pitch_offset_);  //世界坐标系下pitch向上为负
+  pitch = smooth_pitch(pitch, std::chrono::steady_clock::now());
   return {true, false, yaw, pitch};
 }
 
@@ -141,6 +163,34 @@ io::Command Aimer::aim(
   return command;
 }
 
+double Aimer::smooth_pitch(double raw_pitch, std::chrono::steady_clock::time_point timestamp)
+{
+  if (!pitch_filter_initialized_) {
+    pitch_filter_initialized_ = true;
+    pitch_filtered_ = raw_pitch;
+    pitch_filter_t_ = timestamp;
+    return raw_pitch;
+  }
+
+  auto dt = tools::delta_time(timestamp, pitch_filter_t_);
+  pitch_filter_t_ = timestamp;
+
+  if (dt <= 0 || dt > 0.2) {
+    pitch_filtered_ = raw_pitch;
+    return raw_pitch;
+  }
+
+  auto limited_pitch = raw_pitch;
+  if (pitch_max_rate_ > 0.0) {
+    auto max_delta = pitch_max_rate_ * dt;
+    auto delta = tools::limit_min_max(raw_pitch - pitch_filtered_, -max_delta, max_delta);
+    limited_pitch = pitch_filtered_ + delta;
+  }
+
+  pitch_filtered_ = pitch_filtered_ + pitch_lpf_alpha_ * (limited_pitch - pitch_filtered_);
+  return pitch_filtered_;
+}
+
 AimPoint Aimer::choose_aim_point(const Target & target)
 {
   Eigen::VectorXd ekf_x = target.ekf_x();
@@ -160,7 +210,7 @@ AimPoint Aimer::choose_aim_point(const Target & target)
   }
 
   // 不考虑小陀螺
-  if (std::abs(target.ekf_x()[8]) <= 2 && target.name != ArmorName::outpost) {
+  if (std::abs(target.ekf_x()[7]) <= 2 && target.name != ArmorName::outpost) {
     // 选择在可射击范围内的装甲板
     std::vector<int> id_list;
     for (int i = 0; i < armor_num; i++) {

@@ -35,6 +35,11 @@ private:
   double yaw_offset_;
   std::optional<double> left_yaw_offset_, right_yaw_offset_;
   double pitch_offset_;
+  double pitch_lpf_alpha_;
+  double pitch_max_rate_;
+  bool pitch_filter_initialized_;
+  double pitch_filtered_;
+  std::chrono::steady_clock::time_point pitch_filter_t_;
   double comming_angle_;
   double leaving_angle_;
   double lock_id_ = -1;
@@ -42,6 +47,7 @@ private:
   double low_speed_delay_time_;
   double decision_speed_;
 
+  double smooth_pitch(double raw_pitch, std::chrono::steady_clock::time_point timestamp);
   AimPoint choose_aim_point(const Target & target);
 };
 

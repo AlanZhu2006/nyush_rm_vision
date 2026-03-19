@@ -1,7 +1,9 @@
 #include "planner.hpp"
 
+#include <limits>
 #include <vector>
 
+#include "tools/logger.hpp"
 #include "tools/math_tools.hpp"
 #include "tools/trajectory.hpp"
 #include "tools/yaml.hpp"
@@ -19,6 +21,11 @@ Planner::Planner(const std::string & config_path)
   decision_speed_ = tools::read<double>(yaml, "decision_speed");
   high_speed_delay_time_ = tools::read<double>(yaml, "high_speed_delay_time");
   low_speed_delay_time_ = tools::read<double>(yaml, "low_speed_delay_time");
+  aim_switch_hysteresis_m_ =
+    yaml["planner_aim_switch_hysteresis_m"]
+      ? yaml["planner_aim_switch_hysteresis_m"].as<double>()
+      : 0.05;
+  if (aim_switch_hysteresis_m_ < 0) aim_switch_hysteresis_m_ = 0;
 
   setup_yaw_solver(config_path);
   setup_pitch_solver(config_path);
@@ -32,28 +39,26 @@ Plan Planner::plan(Target target, double bullet_speed)
   }
 
   // 1. Predict fly_time
-  Eigen::Vector3d xyz;
-  auto min_dist = 1e10;
-  for (auto & xyza : target.armor_xyza_list()) {
-    auto dist = xyza.head<2>().norm();
-    if (dist < min_dist) {
-      min_dist = dist;
-      xyz = xyza.head<3>();
-    }
+  int lock_id = aim_lock_id_;
+  auto aim_xyza = select_aim_point(target, lock_id);
+  auto bullet_traj = tools::Trajectory(bullet_speed, aim_xyza.head<2>().norm(), aim_xyza.z());
+  if (bullet_traj.unsolvable) {
+    tools::logger()->warn("Unsolvable target {:.2f}", bullet_speed);
+    return {false};
   }
-  auto bullet_traj = tools::Trajectory(bullet_speed, min_dist, xyz.z());
   target.predict(bullet_traj.fly_time);
 
   // 2. Get trajectory
   double yaw0;
   Trajectory traj;
   try {
-    yaw0 = aim(target, bullet_speed)(0);
-    traj = get_trajectory(target, yaw0, bullet_speed);
+    yaw0 = aim(target, bullet_speed, lock_id)(0);
+    traj = get_trajectory(target, yaw0, bullet_speed, lock_id);
   } catch (const std::exception & e) {
     tools::logger()->warn("Unsolvable target {:.2f}", bullet_speed);
     return {false};
   }
+  aim_lock_id_ = lock_id;
 
   // 3. Solve yaw
   Eigen::VectorXd x0(2);
@@ -153,42 +158,69 @@ void Planner::setup_pitch_solver(const std::string & config_path)
   pitch_solver_->settings->max_iter = 10;
 }
 
-Eigen::Matrix<double, 2, 1> Planner::aim(const Target & target, double bullet_speed)
+Eigen::Vector4d Planner::select_aim_point(const Target & target, int & lock_id)
 {
-  Eigen::Vector3d xyz;
-  double yaw;
-  auto min_dist = 1e10;
+  auto armor_xyza_list = target.armor_xyza_list();
+  if (armor_xyza_list.empty()) throw std::runtime_error("Empty armor list!");
 
-  for (auto & xyza : target.armor_xyza_list()) {
-    auto dist = xyza.head<2>().norm();
-    if (dist < min_dist) {
-      min_dist = dist;
-      xyz = xyza.head<3>();
-      yaw = xyza[3];
+  if (!target.jumped) {
+    lock_id = 0;
+    debug_xyza = armor_xyza_list[0];
+    return armor_xyza_list[0];
+  }
+
+  int best_id = 0;
+  auto best_dist = std::numeric_limits<double>::max();
+  std::vector<double> distance_list;
+  distance_list.reserve(armor_xyza_list.size());
+
+  for (std::size_t i = 0; i < armor_xyza_list.size(); i++) {
+    auto dist = armor_xyza_list[i].head<2>().norm();
+    distance_list.push_back(dist);
+    if (dist < best_dist) {
+      best_dist = dist;
+      best_id = static_cast<int>(i);
     }
   }
-  debug_xyza = Eigen::Vector4d(xyz.x(), xyz.y(), xyz.z(), yaw);
+
+  if (lock_id < 0 || lock_id >= static_cast<int>(armor_xyza_list.size())) {
+    lock_id = best_id;
+  } else {
+    auto locked_dist = distance_list[lock_id];
+    if (best_dist + aim_switch_hysteresis_m_ < locked_dist) {
+      lock_id = best_id;
+    }
+  }
+
+  debug_xyza = armor_xyza_list[lock_id];
+  return armor_xyza_list[lock_id];
+}
+
+Eigen::Matrix<double, 2, 1> Planner::aim(const Target & target, double bullet_speed, int & lock_id)
+{
+  auto aim_xyza = select_aim_point(target, lock_id);
+  auto xyz = aim_xyza.head<3>();
 
   auto azim = std::atan2(xyz.y(), xyz.x());
-  auto bullet_traj = tools::Trajectory(bullet_speed, min_dist, xyz.z());
+  auto bullet_traj = tools::Trajectory(bullet_speed, xyz.head<2>().norm(), xyz.z());
   if (bullet_traj.unsolvable) throw std::runtime_error("Unsolvable bullet trajectory!");
 
   return {tools::limit_rad(azim + yaw_offset_), -bullet_traj.pitch - pitch_offset_};
 }
 
-Trajectory Planner::get_trajectory(Target & target, double yaw0, double bullet_speed)
+Trajectory Planner::get_trajectory(Target & target, double yaw0, double bullet_speed, int lock_id)
 {
   Trajectory traj;
 
   target.predict(-DT * (HALF_HORIZON + 1));
-  auto yaw_pitch_last = aim(target, bullet_speed);
+  auto yaw_pitch_last = aim(target, bullet_speed, lock_id);
 
   target.predict(DT);  // [0] = -HALF_HORIZON * DT -> [HHALF_HORIZON] = 0
-  auto yaw_pitch = aim(target, bullet_speed);
+  auto yaw_pitch = aim(target, bullet_speed, lock_id);
 
   for (int i = 0; i < HORIZON; i++) {
     target.predict(DT);
-    auto yaw_pitch_next = aim(target, bullet_speed);
+    auto yaw_pitch_next = aim(target, bullet_speed, lock_id);
 
     auto yaw_vel = tools::limit_rad(yaw_pitch_next(0) - yaw_pitch_last(0)) / (2 * DT);
     auto pitch_vel = (yaw_pitch_next(1) - yaw_pitch_last(1)) / (2 * DT);

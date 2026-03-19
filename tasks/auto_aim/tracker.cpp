@@ -3,7 +3,9 @@
 #include <yaml-cpp/yaml.h>
 
 #include <cmath>
+#include <limits>
 #include <tuple>
+#include <vector>
 
 #include "tools/logger.hpp"
 #include "tools/math_tools.hpp"
@@ -289,26 +291,57 @@ bool Tracker::set_target(std::list<Armor> & armors, std::chrono::steady_clock::t
 bool Tracker::update_target(std::list<Armor> & armors, std::chrono::steady_clock::time_point t)
 {
   target_.predict(t);
-  
-  int found_count = 0;
-  Armor* best_armor = nullptr;
-  double min_x = 1e10;
-  
+
+  std::vector<Armor *> candidate_armors;
   for (auto & armor : armors) {
     if (armor.name != target_.name || armor.type != target_.armor_type) continue;
-    found_count++;
-    if (armor.center.x < min_x) {
-      min_x = armor.center.x;
-      best_armor = &armor;
+    candidate_armors.push_back(&armor);
+  }
+
+  if (candidate_armors.empty()) return false;
+
+  const auto predicted_xyza_list = target_.armor_xyza_list();
+
+  Armor * best_armor = nullptr;
+  auto best_score = std::numeric_limits<double>::max();
+
+  constexpr double ID_SWITCH_PENALTY = 0.08;
+  const auto last_id = target_.last_id;
+
+  for (auto * armor : candidate_armors) {
+    solver_.solve(*armor);
+
+    auto best_match_score = std::numeric_limits<double>::max();
+    int best_match_id = -1;
+
+    for (std::size_t i = 0; i < predicted_xyza_list.size(); i++) {
+      const auto & xyza = predicted_xyza_list[i];
+      Eigen::Vector3d ypd = tools::xyz2ypd(xyza.head(3));
+      auto score = std::abs(tools::limit_rad(armor->ypr_in_world[0] - xyza[3])) +
+                   std::abs(tools::limit_rad(armor->ypd_in_world[0] - ypd[0]));
+
+      if (score < best_match_score) {
+        best_match_score = score;
+        best_match_id = static_cast<int>(i);
+      }
+    }
+
+    if (
+      last_id >= 0 && last_id < static_cast<int>(predicted_xyza_list.size()) &&
+      best_match_id != last_id) {
+      best_match_score += ID_SWITCH_PENALTY;
+    }
+
+    if (best_match_score < best_score) {
+      best_score = best_match_score;
+      best_armor = armor;
     }
   }
-  
-  if (found_count == 0) return false;
-  
-  // Only solve PnP once for the best armor
-  solver_.solve(*best_armor);
+
+  if (best_armor == nullptr) return false;
+
   target_.update(*best_armor);
-  
+
   return true;
 }
 
