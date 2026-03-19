@@ -5,7 +5,7 @@ default:
 
 default_build_dir := "build"
 default_cmake_generator := "Unix Makefiles"
-default_config := "configs/odin.yaml"
+default_config := `robot_type=odin; if [ -f .robot_type ]; then robot_type=$(tr -d '[:space:]' < .robot_type); if [ -z "$robot_type" ]; then robot_type=odin; fi; fi; printf 'configs/%s.yaml' "$robot_type"`
 default_calib_config := "configs/calibration.yaml"
 default_calib_folder := "assets/img_with_q"
 default_jobs := `nproc`
@@ -45,6 +45,30 @@ cmake build_dir=default_build_dir profile=default_profile use_tensorrt=default_u
       fi; \
     done; \
   fi; \
+  requested_tensorrt="{{use_tensorrt}}"; \
+  requested_tensorrt="${requested_tensorrt^^}"; \
+  if [[ "${requested_tensorrt}" == "ON" ]]; then \
+    trt_include=""; trt_lib=""; trt_plugin_lib=""; cuda_rt_lib=""; cuda_include=""; \
+    for candidate in /usr/include/NvInfer.h /usr/include/aarch64-linux-gnu/NvInfer.h /usr/include/x86_64-linux-gnu/NvInfer.h; do \
+      if [[ -f "${candidate}" ]]; then trt_include="${candidate}"; break; fi; \
+    done; \
+    for candidate in /usr/lib/libnvinfer.so /usr/lib/x86_64-linux-gnu/libnvinfer.so /usr/lib/aarch64-linux-gnu/libnvinfer.so; do \
+      if [[ -f "${candidate}" ]]; then trt_lib="${candidate}"; break; fi; \
+    done; \
+    for candidate in /usr/lib/libnvinfer_plugin.so /usr/lib/x86_64-linux-gnu/libnvinfer_plugin.so /usr/lib/aarch64-linux-gnu/libnvinfer_plugin.so; do \
+      if [[ -f "${candidate}" ]]; then trt_plugin_lib="${candidate}"; break; fi; \
+    done; \
+    for candidate in /usr/local/cuda/lib64/libcudart.so /usr/lib/libcudart.so /usr/lib/x86_64-linux-gnu/libcudart.so /usr/lib/aarch64-linux-gnu/libcudart.so /usr/lib/wsl/lib/libcudart.so; do \
+      if [[ -f "${candidate}" ]]; then cuda_rt_lib="${candidate}"; break; fi; \
+    done; \
+    for candidate in /usr/local/cuda/include/cuda_runtime_api.h /usr/include/cuda_runtime_api.h /usr/include/aarch64-linux-gnu/cuda_runtime_api.h /usr/include/x86_64-linux-gnu/cuda_runtime_api.h; do \
+      if [[ -f "${candidate}" ]]; then cuda_include="${candidate}"; break; fi; \
+    done; \
+    if [[ -z "${trt_include}" || -z "${trt_lib}" || -z "${trt_plugin_lib}" || -z "${cuda_rt_lib}" || -z "${cuda_include}" ]]; then \
+      echo "[cmake] TensorRT/CUDA not found locally, falling back to USE_TENSORRT=OFF"; \
+      requested_tensorrt="OFF"; \
+    fi; \
+  fi; \
   launcher_args=(); \
   if command -v ccache >/dev/null 2>&1; then \
     launcher_args=(-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache); \
@@ -52,10 +76,10 @@ cmake build_dir=default_build_dir profile=default_profile use_tensorrt=default_u
   fi; \
   if [[ -n "${ov_dir}" ]]; then \
     echo "[cmake] Using OpenVINO_DIR=${ov_dir}"; \
-    command cmake -G "{{default_cmake_generator}}" -S . -B {{build_dir}} -DCMAKE_BUILD_TYPE={{profile}} -DUSE_TENSORRT={{use_tensorrt}} "${launcher_args[@]}" -DOpenVINO_DIR="${ov_dir}"; \
+    command cmake -G "{{default_cmake_generator}}" -S . -B {{build_dir}} -DCMAKE_BUILD_TYPE={{profile}} -DUSE_TENSORRT="${requested_tensorrt}" "${launcher_args[@]}" -DOpenVINO_DIR:PATH="${ov_dir}"; \
   else \
     echo "[cmake] OpenVINO_DIR not set, trying system default"; \
-    command cmake -G "{{default_cmake_generator}}" -S . -B {{build_dir}} -DCMAKE_BUILD_TYPE={{profile}} -DUSE_TENSORRT={{use_tensorrt}} "${launcher_args[@]}"; \
+    command cmake -G "{{default_cmake_generator}}" -S . -B {{build_dir}} -DCMAKE_BUILD_TYPE={{profile}} -DUSE_TENSORRT="${requested_tensorrt}" "${launcher_args[@]}"; \
   fi
 
 # Build all targets or one specific target.
@@ -72,6 +96,27 @@ ensure-configured build_dir=default_build_dir profile=default_profile use_tensor
   reason=""; \
   requested_tensorrt="{{use_tensorrt}}"; \
   requested_tensorrt="${requested_tensorrt^^}"; \
+  if [[ "${requested_tensorrt}" == "ON" ]]; then \
+    trt_include=""; trt_lib=""; trt_plugin_lib=""; cuda_rt_lib=""; cuda_include=""; \
+    for candidate in /usr/include/NvInfer.h /usr/include/aarch64-linux-gnu/NvInfer.h /usr/include/x86_64-linux-gnu/NvInfer.h; do \
+      if [[ -f "${candidate}" ]]; then trt_include="${candidate}"; break; fi; \
+    done; \
+    for candidate in /usr/lib/libnvinfer.so /usr/lib/x86_64-linux-gnu/libnvinfer.so /usr/lib/aarch64-linux-gnu/libnvinfer.so; do \
+      if [[ -f "${candidate}" ]]; then trt_lib="${candidate}"; break; fi; \
+    done; \
+    for candidate in /usr/lib/libnvinfer_plugin.so /usr/lib/x86_64-linux-gnu/libnvinfer_plugin.so /usr/lib/aarch64-linux-gnu/libnvinfer_plugin.so; do \
+      if [[ -f "${candidate}" ]]; then trt_plugin_lib="${candidate}"; break; fi; \
+    done; \
+    for candidate in /usr/local/cuda/lib64/libcudart.so /usr/lib/libcudart.so /usr/lib/x86_64-linux-gnu/libcudart.so /usr/lib/aarch64-linux-gnu/libcudart.so /usr/lib/wsl/lib/libcudart.so; do \
+      if [[ -f "${candidate}" ]]; then cuda_rt_lib="${candidate}"; break; fi; \
+    done; \
+    for candidate in /usr/local/cuda/include/cuda_runtime_api.h /usr/include/cuda_runtime_api.h /usr/include/aarch64-linux-gnu/cuda_runtime_api.h /usr/include/x86_64-linux-gnu/cuda_runtime_api.h; do \
+      if [[ -f "${candidate}" ]]; then cuda_include="${candidate}"; break; fi; \
+    done; \
+    if [[ -z "${trt_include}" || -z "${trt_lib}" || -z "${trt_plugin_lib}" || -z "${cuda_rt_lib}" || -z "${cuda_include}" ]]; then \
+      requested_tensorrt="OFF"; \
+    fi; \
+  fi; \
   requested_ov_dir="{{openvino_dir}}"; \
   if [[ -z "${requested_ov_dir}" && -n "${OpenVINO_DIR:-}" ]]; then \
     requested_ov_dir="${OpenVINO_DIR}"; \
@@ -119,8 +164,8 @@ ensure-configured build_dir=default_build_dir profile=default_profile use_tensor
     fi; \
     cache_openvino=""; \
     while IFS= read -r line; do \
-      if [[ "${line}" == OpenVINO_DIR:PATH=* ]]; then \
-        cache_openvino="${line#OpenVINO_DIR:PATH=}"; \
+      if [[ "${line}" == OpenVINO_DIR:*=* ]]; then \
+        cache_openvino="${line#*=}"; \
         break; \
       fi; \
     done < "{{build_dir}}/CMakeCache.txt"; \
@@ -133,7 +178,7 @@ ensure-configured build_dir=default_build_dir profile=default_profile use_tensor
   fi; \
   if [[ "${need_configure}" == "true" ]]; then \
     echo "[ensure-configured] ${reason}, running cmake..."; \
-    just cmake "{{build_dir}}" "{{profile}}" "{{use_tensorrt}}" "{{openvino_dir}}"; \
+    just cmake "{{build_dir}}" "{{profile}}" "${requested_tensorrt}" "{{openvino_dir}}"; \
   else \
     echo "[ensure-configured] build tree is valid, skip cmake"; \
   fi
@@ -224,6 +269,8 @@ run name="mt" arg="" arg2="" arg3="" config=default_config build_dir=default_bui
 run-help:
   @echo "just run <name> [config_path] [flags]"
   @echo ""
+  @echo "Default runtime config: {{default_config}} (.robot_type -> configs/<robot>.yaml, fallback: configs/odin.yaml)"
+  @echo ""
   @echo "Env: HIK_SDK_RUNTIME=auto|default|system|custom, MVCAM_LD_PRELOAD=/path/lib.so"
   @echo ""
   @echo "Available run names:"
@@ -239,8 +286,8 @@ run-help:
   @echo "Examples:"
   @echo "  just run standard"
   @echo "  just run mt"
-  @echo "  just run mt configs/odin.yaml"
-  @echo "  just run response-yaw configs/odin.yaml --amp=4 --signal=step"
+  @echo "  just run mt {{default_config}}"
+  @echo "  just run response-yaw {{default_config}} --amp=4 --signal=step"
   @echo "  just run response-pitch --signal=triangle_wave"
 
 # Unified calibration launcher. See `just calibrate-help` for detailed usage.
@@ -461,6 +508,8 @@ test name="imu" arg="" arg2="" arg3="" arg4="" config=default_config build_dir=d
 test-help:
   @echo "just test <name> [config_path] [flags]"
   @echo ""
+  @echo "Default test config: {{default_config}} (.robot_type -> configs/<robot>.yaml, fallback: configs/odin.yaml)"
+  @echo ""
   @echo "Available test names:"
   @echo "  imu     - IMU communication link test (read + periodic command send)"
   @echo "  camera  - Industrial camera stream test"
@@ -486,7 +535,7 @@ test-help:
   @echo "  --xauthority=..      Xauthority path for --local-display (default: $HOME/.Xauthority)"
   @echo "  env HIK_SDK_RUNTIME=auto|default|system|custom   control Hik SDK selection"
   @echo "  env MVCAM_LD_PRELOAD=/path/lib.so   use a specific Hik SDK when HIK_SDK_RUNTIME=custom"
-  @echo "  note: detect auto-configures USE_TENSORRT=ON (requires TensorRT/CUDA libs)"
+  @echo "  note: detect prefers USE_TENSORRT=ON and falls back to OFF if TensorRT/CUDA is unavailable"
   @echo "  (interactive)    gimbal: aim <yaw_deg> [pitch_deg], sim on/off, send on/off"
   @echo ""
   @echo "Examples:"
@@ -498,7 +547,7 @@ test-help:
   @echo "  just test detect --web --web-port=9000"
   @echo "  just test detect --web --send"
   @echo "  just test detect --local-display=:0 --xauthority=/home/nyu/.Xauthority"
-  @echo "  just test detect configs/odin.yaml --send"
+  @echo "  just test detect {{default_config}} --send"
   @echo "  just test gimbal --fire"
   @echo "  just test gimbal --distance=4 --radius=0.8 --omega=1.5 --hz=120"
   @echo "  just test gimbal --verbose"
