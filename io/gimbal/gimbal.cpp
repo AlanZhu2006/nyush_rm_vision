@@ -1,5 +1,9 @@
 #include "gimbal.hpp"
 
+#include <algorithm>
+#include <cmath>
+#include <cstdlib>
+
 #include "tools/crc.hpp"
 #include "tools/logger.hpp"
 #include "tools/math_tools.hpp"
@@ -7,10 +11,55 @@
 
 namespace io
 {
+namespace
+{
+int read_sign_or_default(const YAML::Node & yaml, const char * key, int default_value)
+{
+  if (!yaml[key]) return default_value;
+
+  auto sign = yaml[key].as<int>();
+  if (sign != 1 && sign != -1) {
+    tools::logger()->error("[Gimbal] {} must be either 1 or -1, got {}", key, sign);
+    exit(1);
+  }
+  return sign;
+}
+
+Eigen::Vector3d quaternion_to_protocol_ypr(const Eigen::Quaterniond & q)
+{
+  const double w = q.w();
+  const double x = q.x();
+  const double y = q.y();
+  const double z = q.z();
+
+  const double yaw = std::atan2(2.0 * (w * z + x * y), 2.0 * (w * w + x * x) - 1.0);
+  const double pitch = std::atan2(2.0 * (w * x + y * z), 2.0 * (w * w + z * z) - 1.0);
+  const double roll = std::asin(std::clamp(2.0 * (w * y - x * z), -1.0, 1.0));
+
+  return {yaw, pitch, roll};
+}
+
+Eigen::Quaterniond protocol_ypr_to_quaternion(double yaw, double pitch, double roll)
+{
+  // Lower-machine firmware uses yaw(z), pitch(x), roll(y).
+  // tools::rotation_matrix uses yaw(z), pitch(y), roll(x), so swap pitch/roll here.
+  return Eigen::Quaterniond(tools::rotation_matrix({yaw, roll, pitch})).normalized();
+}
+}  // namespace
+
 Gimbal::Gimbal(const std::string & config_path)
 {
   auto yaml = tools::load(config_path);
   auto com_port = tools::read<std::string>(yaml, "com_port");
+  if (yaml["gimbal_protocol_adapter"]) {
+    const auto & adapter_yaml = yaml["gimbal_protocol_adapter"];
+    if (adapter_yaml["enabled"]) adapter_.enabled = adapter_yaml["enabled"].as<bool>();
+    adapter_.rx_yaw_sign = read_sign_or_default(adapter_yaml, "rx_yaw_sign", 1);
+    adapter_.rx_pitch_sign = read_sign_or_default(adapter_yaml, "rx_pitch_sign", 1);
+    adapter_.rx_roll_sign = read_sign_or_default(adapter_yaml, "rx_roll_sign", 1);
+    adapter_.tx_yaw_sign = read_sign_or_default(adapter_yaml, "tx_yaw_sign", 1);
+    adapter_.tx_pitch_sign = read_sign_or_default(adapter_yaml, "tx_pitch_sign", 1);
+  }
 
   try {
     serial_.setPort(com_port);
@@ -26,6 +75,12 @@ Gimbal::Gimbal(const std::string & config_path)
 
   queue_.pop();
   tools::logger()->info("[Gimbal] First q received.");
+  if (adapter_.enabled) {
+    tools::logger()->info(
+      "[Gimbal] Protocol adapter enabled: rx(yaw={}, pitch={}, roll={}), tx(yaw={}, pitch={})",
+      adapter_.rx_yaw_sign, adapter_.rx_pitch_sign, adapter_.rx_roll_sign, adapter_.tx_yaw_sign,
+      adapter_.tx_pitch_sign);
+  }
 }
 
 Gimbal::~Gimbal()
@@ -79,15 +134,41 @@ Eigen::Quaterniond Gimbal::q(std::chrono::steady_clock::time_point t)
   }
 }
 
-void Gimbal::send(io::VisionToGimbal VisionToGimbal)
+VisionToGimbal Gimbal::adapt_tx(const VisionToGimbal & packet) const
 {
-  tx_data_.mode = VisionToGimbal.mode;
-  tx_data_.yaw = VisionToGimbal.yaw;
-  tx_data_.yaw_vel = VisionToGimbal.yaw_vel;
-  tx_data_.yaw_acc = VisionToGimbal.yaw_acc;
-  tx_data_.pitch = VisionToGimbal.pitch;
-  tx_data_.pitch_vel = VisionToGimbal.pitch_vel;
-  tx_data_.pitch_acc = VisionToGimbal.pitch_acc;
+  if (!adapter_.enabled) return packet;
+
+  auto adapted = packet;
+  adapted.yaw = adapter_.tx_yaw_sign * packet.yaw;
+  adapted.yaw_vel = adapter_.tx_yaw_sign * packet.yaw_vel;
+  adapted.yaw_acc = adapter_.tx_yaw_sign * packet.yaw_acc;
+  adapted.pitch = adapter_.tx_pitch_sign * packet.pitch;
+  adapted.pitch_vel = adapter_.tx_pitch_sign * packet.pitch_vel;
+  adapted.pitch_acc = adapter_.tx_pitch_sign * packet.pitch_acc;
+  return adapted;
+}
+
+Eigen::Quaterniond Gimbal::adapt_rx_quaternion(const Eigen::Quaterniond & q) const
+{
+  if (!adapter_.enabled) return q;
+
+  auto protocol_ypr = quaternion_to_protocol_ypr(q);
+  return protocol_ypr_to_quaternion(
+    adapter_.rx_yaw_sign * protocol_ypr[0], adapter_.rx_pitch_sign * protocol_ypr[1],
+    adapter_.rx_roll_sign * protocol_ypr[2]);
+}
+
+void Gimbal::send(io::VisionToGimbal vision_to_gimbal)
+{
+  auto adapted = adapt_tx(vision_to_gimbal);
+
+  tx_data_.mode = adapted.mode;
+  tx_data_.yaw = adapted.yaw;
+  tx_data_.yaw_vel = adapted.yaw_vel;
+  tx_data_.yaw_acc = adapted.yaw_acc;
+  tx_data_.pitch = adapted.pitch;
+  tx_data_.pitch_vel = adapted.pitch_vel;
+  tx_data_.pitch_acc = adapted.pitch_acc;
   tx_data_.crc16 = tools::get_crc16(
     reinterpret_cast<uint8_t *>(&tx_data_), sizeof(tx_data_) - sizeof(tx_data_.crc16));
 
@@ -102,21 +183,9 @@ void Gimbal::send(
   bool control, bool fire, float yaw, float yaw_vel, float yaw_acc, float pitch, float pitch_vel,
   float pitch_acc)
 {
-  tx_data_.mode = control ? (fire ? 2 : 1) : 0;
-  tx_data_.yaw = yaw;
-  tx_data_.yaw_vel = yaw_vel;
-  tx_data_.yaw_acc = yaw_acc;
-  tx_data_.pitch = pitch;
-  tx_data_.pitch_vel = pitch_vel;
-  tx_data_.pitch_acc = pitch_acc;
-  tx_data_.crc16 = tools::get_crc16(
-    reinterpret_cast<uint8_t *>(&tx_data_), sizeof(tx_data_) - sizeof(tx_data_.crc16));
-
-  try {
-    serial_.write(reinterpret_cast<uint8_t *>(&tx_data_), sizeof(tx_data_));
-  } catch (const std::exception & e) {
-    tools::logger()->warn("[Gimbal] Failed to write serial: {}", e.what());
-  }
+  send(io::VisionToGimbal{
+    {'S', 'P'}, static_cast<uint8_t>(control ? (fire ? 2 : 1) : 0), yaw, yaw_vel, yaw_acc, pitch,
+    pitch_vel, pitch_acc, 0});
 }
 
 bool Gimbal::read(uint8_t * buffer, size_t size)
@@ -175,15 +244,17 @@ void Gimbal::read_thread()
       last_packet_time = now;
     }
 
-    Eigen::Quaterniond q(rx_data_.q[0], rx_data_.q[1], rx_data_.q[2], rx_data_.q[3]);
-    queue_.push({q, t});
+    Eigen::Quaterniond q_proto(rx_data_.q[0], rx_data_.q[1], rx_data_.q[2], rx_data_.q[3]);
+    queue_.push({adapt_rx_quaternion(q_proto), t});
 
     std::lock_guard<std::mutex> lock(mutex_);
 
-    state_.yaw = rx_data_.yaw;
-    state_.yaw_vel = rx_data_.yaw_vel;
-    state_.pitch = rx_data_.pitch;
-    state_.pitch_vel = rx_data_.pitch_vel;
+    const auto rx_yaw_sign = adapter_.enabled ? adapter_.rx_yaw_sign : 1;
+    const auto rx_pitch_sign = adapter_.enabled ? adapter_.rx_pitch_sign : 1;
+    state_.yaw = rx_yaw_sign * rx_data_.yaw;
+    state_.yaw_vel = rx_yaw_sign * rx_data_.yaw_vel;
+    state_.pitch = rx_pitch_sign * rx_data_.pitch;
+    state_.pitch_vel = rx_pitch_sign * rx_data_.pitch_vel;
     state_.bullet_speed = rx_data_.bullet_speed;
     state_.bullet_count = rx_data_.bullet_count;
 

@@ -96,6 +96,25 @@ distort_coeffs: [-0.08382326954462313, 0.097449270330296239, -0.0012558283068959
 R_camera2gimbal: [0, 0, 1, -1, 0, 0, 0, -1, 0]
 t_camera2gimbal: [0.1, 0, 0.05]
 
+# Optional protocol-edge sign adapter for io::Gimbal.
+# Keep disabled for legacy nyush-rm-control main semantics.
+gimbal_protocol_adapter:
+  enabled: false
+  rx_yaw_sign: 1
+  rx_pitch_sign: 1
+  rx_roll_sign: 1
+  tx_yaw_sign: 1
+  tx_pitch_sign: 1
+
+# Example for nyush-rm-control/refactor-yaw-direction current numeric behavior:
+# gimbal_protocol_adapter:
+#   enabled: true
+#   rx_yaw_sign: -1
+#   rx_pitch_sign: 1
+#   rx_roll_sign: 1
+#   tx_yaw_sign: -1
+#   tx_pitch_sign: 1
+
 
 #####-----buff_detector参数-----#####
 detect:
