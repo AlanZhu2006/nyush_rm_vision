@@ -3,7 +3,7 @@
 cmd_vel_keyboard_fixed.py
 
 Fixed keyboard control with proper thread safety and graceful shutdown.
-19-byte bridge-compatible radar protocol (vx, vy, wz, yaw_deg).
+19-byte bridge-compatible radar protocol (vx, vy, wz, yaw_deg), plus A3 RobotControl frames.
 
 Usage:
   python3 cmd_vel_keyboard_fixed.py --port /dev/pts/Y --keyboard --speed 1.0
@@ -30,7 +30,15 @@ except ImportError:
 
 RADAR_CMD_HEADER = b"\xA5\x5A"
 RADAR_TELEM_HEADER = b"\xA6\x6A"
+ROBOT_CTRL_HEADER = b"\xA3"
 RADAR_FRAME_SIZE = 19
+ROBOT_CTRL_FRAME_SIZE = 16
+
+SENTRY_EXT_FLAG_SCAN_CONTROL_VALID = 0x01
+SENTRY_EXT_FLAG_STOP_GIMBAL_SCAN = 0x02
+SENTRY_EXT_FLAG_SCAN_ENABLED = 0x04
+SENTRY_EXT_FLAG_ALLOW_VISION_CONTROL = 0x08
+SENTRY_EXT_FLAG_SEARCH_WHEN_TARGET_LOST = 0x10
 
 
 def crc8(data: bytes) -> int:
@@ -44,6 +52,79 @@ def crc8(data: bytes) -> int:
             else:
                 crc = (crc << 1) & 0xFF
     return crc
+
+
+def crc16_x25(data: bytes) -> int:
+    """CRC16/X25 used by the RobotControl bridge frame."""
+    crc = 0xFFFF
+    for byte in data:
+        crc ^= byte
+        for _ in range(8):
+            if crc & 0x0001:
+                crc = (crc >> 1) ^ 0x8408
+            else:
+                crc >>= 1
+    return crc & 0xFFFF
+
+
+def encode_robot_control(
+    control_flags: int,
+    chassis_spin_vel: float = 0.0,
+    scan_yaw_rate_deg_s: float = 0.0,
+    search_pitch_deg: float = float("nan"),
+) -> bytes:
+    payload = struct.pack(
+        "<BBfff",
+        ROBOT_CTRL_HEADER[0],
+        control_flags & 0xFF,
+        chassis_spin_vel,
+        scan_yaw_rate_deg_s,
+        search_pitch_deg,
+    )
+    return payload + struct.pack('<H', crc16_x25(payload))
+
+
+def robot_control_to_fields(msg) -> tuple[int, float, float, float]:
+    stop_gimbal_scan = bool(getattr(msg, "stop_gimbal_scan", False))
+    chassis_spin_vel = float(getattr(msg, "chassis_spin_vel", 0.0))
+    scan_enabled = bool(getattr(msg, "scan_enabled", False))
+    allow_vision_control = bool(getattr(msg, "allow_vision_control", False))
+    search_when_target_lost = bool(getattr(msg, "search_when_target_lost", False))
+    scan_yaw_rate_deg_s = float(getattr(msg, "scan_yaw_rate_deg_s", 0.0))
+    search_pitch_deg = float(getattr(msg, "search_pitch_deg", 0.0))
+
+    has_functional_fields = (
+        scan_enabled
+        or allow_vision_control
+        or search_when_target_lost
+        or abs(scan_yaw_rate_deg_s) > 1e-3
+        or abs(search_pitch_deg) > 1e-3
+    )
+
+    control_flags = SENTRY_EXT_FLAG_SCAN_CONTROL_VALID
+    if stop_gimbal_scan:
+        control_flags |= SENTRY_EXT_FLAG_STOP_GIMBAL_SCAN
+
+    if has_functional_fields:
+        if scan_enabled:
+            control_flags |= SENTRY_EXT_FLAG_SCAN_ENABLED
+        if allow_vision_control:
+            control_flags |= SENTRY_EXT_FLAG_ALLOW_VISION_CONTROL
+        if search_when_target_lost:
+            control_flags |= SENTRY_EXT_FLAG_SEARCH_WHEN_TARGET_LOST
+        return (
+            control_flags,
+            chassis_spin_vel,
+            scan_yaw_rate_deg_s,
+            search_pitch_deg,
+        )
+
+    if stop_gimbal_scan:
+        control_flags |= SENTRY_EXT_FLAG_ALLOW_VISION_CONTROL
+    else:
+        control_flags |= SENTRY_EXT_FLAG_SCAN_ENABLED
+
+    return control_flags, chassis_spin_vel, 0.0, float("nan")
 
 
 def encode_radar_cmd(vx: float, vy: float, wz: float,
@@ -157,6 +238,34 @@ class SerialForwarder:
             return True
         except Exception as e:
             print(f"[ERROR] Serial write failed: {e}")
+            self.close()
+            return False
+
+    def send_robot_control(
+        self,
+        control_flags: int,
+        chassis_spin_vel: float = 0.0,
+        scan_yaw_rate_deg_s: float = 0.0,
+        search_pitch_deg: float = float("nan"),
+    ):
+        frame = encode_robot_control(
+            control_flags,
+            chassis_spin_vel,
+            scan_yaw_rate_deg_s,
+            search_pitch_deg,
+        )
+        if not self.ser or not self.ser.is_open:
+            now = time.time()
+            if now - self.last_reconnect_attempt > self.reconnect_interval:
+                self.last_reconnect_attempt = now
+                self.open()
+            return False
+        try:
+            with self.lock:
+                self.ser.write(frame)
+            return True
+        except Exception as e:
+            print(f"[ERROR] RobotControl write failed: {e}")
             self.close()
             return False
 
@@ -355,12 +464,16 @@ def keyboard_run(forwarder, move_speed=0.3, turn_speed=1.0, send_rate=100):
         print("[INFO] Shutdown complete.")
 
 
-def ros2_run(forwarder, topic='/cmd_vel'):
-    """ROS2 subscriber mode - forward /cmd_vel messages to serial."""
+def ros2_run(forwarder, topic='/cmd_vel', robot_control_topic='/robot_control'):
+    """ROS2 subscriber mode - forward Twist and RobotControl messages to serial."""
     try:
         import rclpy
         from rclpy.node import Node
         from geometry_msgs.msg import Twist
+        try:
+            from rm_decision_interfaces.msg import RobotControl
+        except Exception:
+            RobotControl = None
     except Exception as e:
         print(f"[ERROR] ROS2 import failed: {e}")
         print("[ERROR] Install ROS2 or run in keyboard mode")
@@ -371,7 +484,18 @@ def ros2_run(forwarder, topic='/cmd_vel'):
             super().__init__('cmd_vel_forwarder')
             self.forwarder = forwarder
             self.subscription = self.create_subscription(Twist, topic, self.cb_twist, 10)
+            self.robot_control_subscription = None
             self.get_logger().info(f'[ROS2] Subscribed to {topic}')
+
+            if RobotControl is not None:
+                self.robot_control_subscription = self.create_subscription(
+                    RobotControl, robot_control_topic, self.cb_robot_control, 10
+                )
+                self.get_logger().info(f'[ROS2] Subscribed to {robot_control_topic}')
+            else:
+                self.get_logger().warning(
+                    '[ROS2] rm_decision_interfaces not available; RobotControl forwarding disabled'
+                )
 
         def cb_twist(self, msg: Twist):
             vx = float(msg.linear.x)
@@ -384,10 +508,25 @@ def ros2_run(forwarder, topic='/cmd_vel'):
                 end='\r',
             )
 
+        def cb_robot_control(self, msg):
+            (
+                control_flags,
+                chassis_spin_vel,
+                scan_yaw_rate_deg_s,
+                search_pitch_deg,
+            ) = robot_control_to_fields(msg)
+            self.forwarder.send_robot_control(
+                control_flags,
+                chassis_spin_vel,
+                scan_yaw_rate_deg_s,
+                search_pitch_deg,
+            )
+
     rclpy.init()
     node = CmdVelNode(forwarder)
     try:
-        print("[INFO] Running ROS2 subscriber mode. Listening on /cmd_vel")
+        print(f"[INFO] Running ROS2 subscriber mode. Listening on {topic}")
+        print(f"[INFO] RobotControl topic: {robot_control_topic}")
         print("[INFO] Press Ctrl+C to exit")
         rclpy.spin(node)
     except KeyboardInterrupt:
@@ -486,14 +625,15 @@ def main():
     parser.add_argument('--baud', type=int, default=115200)
 
     parser.add_argument('--keyboard', action='store_true', help='Enable keyboard control mode')
-    parser.add_argument('--ros2', action='store_true', help='Enable ROS2 /cmd_vel subscriber mode')
+    parser.add_argument('--ros2', action='store_true', help='Enable ROS2 Twist + RobotControl subscriber mode')
 
     parser.add_argument('--vx', type=float, help='X velocity (m/s) - enables one-shot mode')
     parser.add_argument('--vy', type=float, default=0.0, help='Y velocity (m/s)')
     parser.add_argument('--wz', type=float, default=0.0, help='Angular velocity (rad/s)')
     parser.add_argument('--duration', type=float, default=1.0, help='Duration in seconds (for one-shot mode)')
 
-    parser.add_argument('--topic', default='/cmd_vel', help='ROS2 topic name (default: /cmd_vel)')
+    parser.add_argument('--topic', default='/cmd_vel', help='ROS2 Twist topic name (default: /cmd_vel)')
+    parser.add_argument('--robot-control-topic', default='/robot_control', help='ROS2 RobotControl topic name (default: /robot_control)')
 
     parser.add_argument('--speed', type=float, default=0.3, help='Movement speed for keyboard (0.0-1.0)')
     parser.add_argument('--rate', type=int, default=200, help='Send rate in Hz')
@@ -517,7 +657,7 @@ def main():
                 sys.exit(1)
             keyboard_run(fwd, move_speed=args.speed, send_rate=args.rate)
         elif args.ros2:
-            ros2_run(fwd, topic=args.topic)
+            ros2_run(fwd, topic=args.topic, robot_control_topic=args.robot_control_topic)
         else:
             print("[ERROR] Please specify a mode:")
             print("\n[USAGE 1] One-shot velocity:")

@@ -48,6 +48,35 @@ constexpr double kTxMinDtS = 1e-3;
 constexpr double kTxMaxCaptureAgeS = 0.20;
 constexpr int kX11ForwardDisplayMaxWidth = 480;
 
+bool has_desktop_session()
+{
+  return std::getenv("DISPLAY") != nullptr || std::getenv("WAYLAND_DISPLAY") != nullptr;
+}
+
+void try_open_web_display_in_browser(int web_port)
+{
+  if (!has_desktop_session()) {
+    tools::logger()->info(
+      "desktop session not detected, open http://127.0.0.1:{} manually", web_port);
+    return;
+  }
+
+  const auto url = fmt::format("http://127.0.0.1:{}", web_port);
+  std::thread([url]() {
+    std::this_thread::sleep_for(300ms);
+#if defined(_WIN32)
+    const auto command = fmt::format("cmd.exe /C start \"\" \"{}\"", url);
+#elif defined(__APPLE__)
+    const auto command = fmt::format("open \"{}\" >/dev/null 2>&1", url);
+#else
+    const auto command = fmt::format("xdg-open \"{}\" >/dev/null 2>&1", url);
+#endif
+    if (std::system(command.c_str()) != 0) {
+      tools::logger()->warn("failed to open browser automatically, open {} manually", url);
+    }
+  }).detach();
+}
+
 bool is_likely_x11_forwarding()
 {
   const char * display_env = std::getenv("DISPLAY");
@@ -263,6 +292,7 @@ int main(int argc, char * argv[])
     web_display_worker = std::make_unique<tools::WebDisplayWorker>("Auto Aim Camera Test", web_port, 60, 480);
     web_display_worker->start();
     tools::logger()->info("Web display started on http://localhost:{}", web_port);
+    try_open_web_display_in_browser(web_port);
   } else if (display) {
     const bool x11_forwarding = is_likely_x11_forwarding();
     if (x11_forwarding) {
