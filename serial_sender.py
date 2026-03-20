@@ -3,7 +3,7 @@
 cmd_vel_keyboard_fixed.py
 
 Fixed keyboard control with proper thread safety and graceful shutdown.
-19-byte bridge-compatible radar protocol (vx, vy, wz, yaw_deg), plus A3 RobotControl frames.
+19-byte bridge-compatible radar protocol (vx, vy, wz, yaw_deg), plus A3 RobotControl frames and 0x5C/0x5D referee status packets.
 
 Usage:
   python3 cmd_vel_keyboard_fixed.py --port /dev/pts/Y --keyboard --speed 1.0
@@ -31,8 +31,12 @@ except ImportError:
 RADAR_CMD_HEADER = b"\xA5\x5A"
 RADAR_TELEM_HEADER = b"\xA6\x6A"
 ROBOT_CTRL_HEADER = b"\xA3"
+GAME_STATUS_HEADER = b"\x5C"
+ROBOT_STATUS_HEADER = b"\x5D"
 RADAR_FRAME_SIZE = 19
 ROBOT_CTRL_FRAME_SIZE = 16
+GAME_STATUS_FRAME_SIZE = 6
+ROBOT_STATUS_FRAME_SIZE = 10
 
 SENTRY_EXT_FLAG_SCAN_CONTROL_VALID = 0x01
 SENTRY_EXT_FLAG_STOP_GIMBAL_SCAN = 0x02
@@ -155,37 +159,87 @@ def parse_radar_telem(frame: bytes):
     return vx, vy, wz, reserved0
 
 
-class RadarTelemetryParser:
+def parse_game_status_frame(frame: bytes):
+    if len(frame) != GAME_STATUS_FRAME_SIZE or frame[:1] != GAME_STATUS_HEADER:
+        raise ValueError("invalid game status frame")
+    if crc16_x25(frame[:-2]) != struct.unpack('<H', frame[-2:])[0]:
+        raise ValueError("invalid game status CRC16")
+    _header, game_progress, stage_remain_time = struct.unpack('<BBH', frame[:-2])
+    return int(game_progress), int(stage_remain_time)
+
+
+def parse_robot_status_frame(frame: bytes):
+    if len(frame) != ROBOT_STATUS_FRAME_SIZE or frame[:1] != ROBOT_STATUS_HEADER:
+        raise ValueError("invalid robot status frame")
+    if crc16_x25(frame[:-2]) != struct.unpack('<H', frame[-2:])[0]:
+        raise ValueError("invalid robot status CRC16")
+    _header, robot_id, current_hp, shooter_heat, team_color, is_attacked = struct.unpack(
+        '<BBHHBB', frame[:-2]
+    )
+    return (
+        int(robot_id),
+        int(current_hp),
+        int(shooter_heat),
+        bool(team_color),
+        bool(is_attacked),
+    )
+
+
+class RadarBridgeParser:
     def __init__(self):
         self.buffer = bytearray()
 
     def feed(self, data: bytes):
-        frames = []
+        events = []
         if data:
             self.buffer.extend(data)
 
-        while len(self.buffer) >= 2:
-            header = bytes(self.buffer[:2])
-            if header == RADAR_TELEM_HEADER:
-                if len(self.buffer) < RADAR_FRAME_SIZE:
-                    break
-                frame = bytes(self.buffer[:RADAR_FRAME_SIZE])
-                try:
-                    frames.append(parse_radar_telem(frame))
+        while len(self.buffer) >= 1:
+            if len(self.buffer) >= 2:
+                header = bytes(self.buffer[:2])
+                if header == RADAR_TELEM_HEADER:
+                    if len(self.buffer) < RADAR_FRAME_SIZE:
+                        break
+                    frame = bytes(self.buffer[:RADAR_FRAME_SIZE])
+                    try:
+                        events.append(("radar_telem", parse_radar_telem(frame)))
+                        del self.buffer[:RADAR_FRAME_SIZE]
+                    except ValueError:
+                        del self.buffer[0]
+                    continue
+
+                if header == RADAR_CMD_HEADER:
+                    if len(self.buffer) < RADAR_FRAME_SIZE:
+                        break
                     del self.buffer[:RADAR_FRAME_SIZE]
+                    continue
+
+            head1 = self.buffer[0]
+            if head1 == GAME_STATUS_HEADER[0]:
+                if len(self.buffer) < GAME_STATUS_FRAME_SIZE:
+                    break
+                frame = bytes(self.buffer[:GAME_STATUS_FRAME_SIZE])
+                try:
+                    events.append(("game_status", parse_game_status_frame(frame)))
+                    del self.buffer[:GAME_STATUS_FRAME_SIZE]
                 except ValueError:
                     del self.buffer[0]
                 continue
 
-            if header == RADAR_CMD_HEADER:
-                if len(self.buffer) < RADAR_FRAME_SIZE:
+            if head1 == ROBOT_STATUS_HEADER[0]:
+                if len(self.buffer) < ROBOT_STATUS_FRAME_SIZE:
                     break
-                del self.buffer[:RADAR_FRAME_SIZE]
+                frame = bytes(self.buffer[:ROBOT_STATUS_FRAME_SIZE])
+                try:
+                    events.append(("robot_status", parse_robot_status_frame(frame)))
+                    del self.buffer[:ROBOT_STATUS_FRAME_SIZE]
+                except ValueError:
+                    del self.buffer[0]
                 continue
 
             del self.buffer[0]
 
-        return frames
+        return events
 
 
 class SerialForwarder:
@@ -200,7 +254,9 @@ class SerialForwarder:
         self.lock = threading.Lock()
         self.last_reconnect_attempt = 0
         self.reconnect_interval = 2.0
-        self.telemetry_parser = RadarTelemetryParser()
+        self.bridge_parser = RadarBridgeParser()
+        self.on_game_status = None
+        self.on_robot_status = None
         self._warned_pitch_drop = False
 
     def open(self):
@@ -289,13 +345,31 @@ class SerialForwarder:
                 if not chunk:
                     continue
 
-                frames = self.telemetry_parser.feed(chunk)
-                for vx, vy, wz, reserved0 in frames:
-                    print(
-                        f"[RADAR TELEM] vx={vx:+.3f} vy={vy:+.3f} wz={wz:+.3f} reserved={reserved0:+.3f}"
-                    )
+                events = self.bridge_parser.feed(chunk)
+                for kind, payload in events:
+                    if kind == "radar_telem":
+                        vx, vy, wz, reserved0 = payload
+                        print(
+                            f"[RADAR TELEM] vx={vx:+.3f} vy={vy:+.3f} wz={wz:+.3f} reserved={reserved0:+.3f}"
+                        )
+                    elif kind == "game_status":
+                        if self.on_game_status is not None:
+                            try:
+                                self.on_game_status(*payload)
+                            except Exception:
+                                pass
+                    elif kind == "robot_status":
+                        if self.on_robot_status is not None:
+                            try:
+                                self.on_robot_status(*payload)
+                            except Exception:
+                                pass
 
-                if frames or (len(chunk) >= 2 and bytes(chunk[:2]) in (RADAR_CMD_HEADER, RADAR_TELEM_HEADER)):
+                if (
+                    events
+                    or (len(chunk) >= 2 and bytes(chunk[:2]) in (RADAR_CMD_HEADER, RADAR_TELEM_HEADER))
+                    or (len(chunk) >= 1 and chunk[0] in (GAME_STATUS_HEADER[0], ROBOT_STATUS_HEADER[0], ROBOT_CTRL_HEADER[0]))
+                ):
                     continue
 
                 try:
@@ -471,9 +545,11 @@ def ros2_run(forwarder, topic='/cmd_vel', robot_control_topic='/robot_control'):
         from rclpy.node import Node
         from geometry_msgs.msg import Twist
         try:
-            from rm_decision_interfaces.msg import RobotControl
+            from rm_decision_interfaces.msg import GameStatus, RobotControl, RobotStatus
         except Exception:
+            GameStatus = None
             RobotControl = None
+            RobotStatus = None
     except Exception as e:
         print(f"[ERROR] ROS2 import failed: {e}")
         print("[ERROR] Install ROS2 or run in keyboard mode")
@@ -485,6 +561,8 @@ def ros2_run(forwarder, topic='/cmd_vel', robot_control_topic='/robot_control'):
             self.forwarder = forwarder
             self.subscription = self.create_subscription(Twist, topic, self.cb_twist, 10)
             self.robot_control_subscription = None
+            self.game_status_pub = None
+            self.robot_status_pub = None
             self.get_logger().info(f'[ROS2] Subscribed to {topic}')
 
             if RobotControl is not None:
@@ -495,6 +573,17 @@ def ros2_run(forwarder, topic='/cmd_vel', robot_control_topic='/robot_control'):
             else:
                 self.get_logger().warning(
                     '[ROS2] rm_decision_interfaces not available; RobotControl forwarding disabled'
+                )
+
+            if GameStatus is not None and RobotStatus is not None:
+                self.game_status_pub = self.create_publisher(GameStatus, '/game_status', 1)
+                self.robot_status_pub = self.create_publisher(RobotStatus, '/robot_status', 10)
+                self.forwarder.on_game_status = self.publish_game_status
+                self.forwarder.on_robot_status = self.publish_robot_status
+                self.get_logger().info('[ROS2] Publishing /game_status and /robot_status from bridge telemetry')
+            else:
+                self.get_logger().warning(
+                    '[ROS2] rm_decision_interfaces not available; referee status publishing disabled'
                 )
 
         def cb_twist(self, msg: Twist):
@@ -522,6 +611,32 @@ def ros2_run(forwarder, topic='/cmd_vel', robot_control_topic='/robot_control'):
                 search_pitch_deg,
             )
 
+        def publish_game_status(self, game_progress: int, stage_remain_time: int):
+            if self.game_status_pub is None:
+                return
+            msg = GameStatus()
+            msg.game_progress = int(game_progress)
+            msg.stage_remain_time = int(stage_remain_time)
+            self.game_status_pub.publish(msg)
+
+        def publish_robot_status(
+            self,
+            robot_id: int,
+            current_hp: int,
+            shooter_heat: int,
+            team_color: bool,
+            is_attacked: bool,
+        ):
+            if self.robot_status_pub is None:
+                return
+            msg = RobotStatus()
+            msg.robot_id = int(robot_id)
+            msg.current_hp = int(current_hp)
+            msg.shooter_heat = int(shooter_heat)
+            msg.team_color = bool(team_color)
+            msg.is_attacked = bool(is_attacked)
+            self.robot_status_pub.publish(msg)
+
     rclpy.init()
     node = CmdVelNode(forwarder)
     try:
@@ -533,6 +648,8 @@ def ros2_run(forwarder, topic='/cmd_vel', robot_control_topic='/robot_control'):
         print("\n[INFO] Interrupted by user")
     finally:
         print("[INFO] Sending final stop command...")
+        forwarder.on_game_status = None
+        forwarder.on_robot_status = None
         for _ in range(10):
             forwarder.send(0.0, 0.0, 0.0)
             time.sleep(0.02)
