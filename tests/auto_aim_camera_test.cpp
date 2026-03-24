@@ -18,6 +18,7 @@
 #include "io/camera.hpp"
 #include "io/gimbal/gimbal.hpp"
 #include "tasks/auto_aim/aimer.hpp"
+#include "tasks/auto_aim/shooter.hpp"
 #include "tasks/auto_aim/solver.hpp"
 #include "tasks/auto_aim/tracker.hpp"
 #include "tasks/auto_aim/yolo.hpp"
@@ -42,8 +43,8 @@ namespace
 {
 constexpr int kTxHoldFrames = 0;
 constexpr int kTxWarmupFrames = 1;
-constexpr double kTxMaxYawRateRadS = 1.0;
-constexpr double kTxMaxPitchRateRadS = 0.6;
+constexpr double kTxMaxYawRateRadS = 4.0;
+constexpr double kTxMaxPitchRateRadS = 2.0;
 constexpr double kTxMinDtS = 1e-3;
 constexpr double kTxMaxCaptureAgeS = 0.20;
 constexpr int kX11ForwardDisplayMaxWidth = 480;
@@ -273,6 +274,7 @@ int main(int argc, char * argv[])
   auto_aim::Solver solver(config_path);
   auto_aim::Tracker tracker(config_path, solver);
   auto_aim::Aimer aimer(config_path);
+  auto_aim::Shooter shooter(config_path);
 
   cv::Mat img;
   std::chrono::steady_clock::time_point t;
@@ -317,6 +319,7 @@ int main(int argc, char * argv[])
     bool stale_capture = capture_age_s > kTxMaxCaptureAgeS;
 
     solver.set_R_gimbal2world(q);
+    auto gimbal_pos = tools::eulers(solver.R_gimbal2world(), 2, 1, 0);
 
     auto armors = detector.detect(img);
     std::list<auto_aim::Target> targets;
@@ -410,14 +413,28 @@ int main(int argc, char * argv[])
       }
     }
 
+    command.shoot = shooter.shoot(command, aimer, targets, gimbal_pos);
+
+    if (send_to_gimbal) {
+      float tx_yaw_vel = 0.0f;
+      float tx_pitch_vel = 0.0f;
+      if (command.control && has_last_sent_command && last_sent_command.control) {
+        auto tx_now = std::chrono::steady_clock::now();
+        auto tx_dt = tools::delta_time(tx_now, last_tx_stamp);
+        if (tx_dt < kTxMinDtS) tx_dt = kTxMinDtS;
+        tx_yaw_vel =
+          static_cast<float>(tools::limit_rad(command.yaw - last_sent_command.yaw) / tx_dt);
+        tx_pitch_vel = static_cast<float>((command.pitch - last_sent_command.pitch) / tx_dt);
+      }
+      cboard.send(
+        command.control, command.shoot, static_cast<float>(command.yaw), tx_yaw_vel, 0.0f,
+        static_cast<float>(command.pitch), tx_pitch_vel, 0.0f);
+    }
+
     if (command.control) {
       last_sent_command = command;
       has_last_sent_command = true;
       last_tx_stamp = std::chrono::steady_clock::now();
-    }
-
-    if (send_to_gimbal) {
-      cboard.send(command);
     }
 
     auto now = std::chrono::steady_clock::now();
