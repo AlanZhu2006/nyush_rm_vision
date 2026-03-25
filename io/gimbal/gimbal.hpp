@@ -58,12 +58,12 @@ enum class GimbalMode
 
 struct GimbalState
 {
-  float yaw;
-  float yaw_vel;
-  float pitch;
-  float pitch_vel;
-  float bullet_speed;
-  uint16_t bullet_count;
+  float yaw = 0.0F;
+  float yaw_vel = 0.0F;
+  float pitch = 0.0F;
+  float pitch_vel = 0.0F;
+  float bullet_speed = 0.0F;
+  uint16_t bullet_count = 0;
 };
 
 class Gimbal
@@ -121,14 +121,16 @@ private:
   std::atomic<bool> quit_ = false;
   mutable std::mutex mutex_;
 
-  GimbalToVision rx_data_;
-  VisionToGimbal tx_data_;
+  GimbalToVision rx_data_{};
+  VisionToGimbal tx_data_{};
 
   GimbalMode mode_ = GimbalMode::IDLE;
-  GimbalState state_;
+  GimbalState state_{};
   ProtocolAdapterConfig adapter_;
   tools::ThreadSafeQueue<std::tuple<Eigen::Quaterniond, std::chrono::steady_clock::time_point>>
     queue_{1000};
+  Eigen::Quaterniond latest_q_ = Eigen::Quaterniond::Identity();
+  std::atomic<bool> first_packet_received_{false};
 
   bool read(uint8_t * buffer, size_t size);
   VisionToGimbal adapt_tx(const VisionToGimbal & packet) const;

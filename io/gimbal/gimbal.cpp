@@ -73,13 +73,18 @@ Gimbal::Gimbal(const std::string & config_path)
 
   thread_ = std::thread(&Gimbal::read_thread, this);
 
-  queue_.pop();
-  tools::logger()->info("[Gimbal] First q received.");
-  if (adapter_.enabled) {
-    tools::logger()->info(
-      "[Gimbal] Protocol adapter enabled: rx(yaw={}, pitch={}, roll={}), tx(yaw={}, pitch={})",
-      adapter_.rx_yaw_sign, adapter_.rx_pitch_sign, adapter_.rx_roll_sign, adapter_.tx_yaw_sign,
-      adapter_.tx_pitch_sign);
+  constexpr auto kInitialPacketTimeout = std::chrono::milliseconds(1500);
+  const auto wait_begin = std::chrono::steady_clock::now();
+  while (!quit_ && !first_packet_received_.load() &&
+         (std::chrono::steady_clock::now() - wait_begin) < kInitialPacketTimeout) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+
+  if (!first_packet_received_.load()) {
+    tools::logger()->warn(
+      "[Gimbal] Timed out waiting for first q after {} ms; continuing with identity IMU until "
+      "packets arrive.",
+      kInitialPacketTimeout.count());
   }
 }
 
@@ -120,10 +125,19 @@ std::string Gimbal::str(GimbalMode mode) const
 
 Eigen::Quaterniond Gimbal::q(std::chrono::steady_clock::time_point t)
 {
+  if (!first_packet_received_.load() || queue_.empty()) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return latest_q_;
+  }
+
   while (true) {
     auto [q_a, t_a] = queue_.pop();
+    if (queue_.empty()) return q_a;
+
     auto [q_b, t_b] = queue_.front();
     auto t_ab = tools::delta_time(t_a, t_b);
+    if (std::abs(t_ab) < 1e-6) return q_b;
+
     auto t_ac = tools::delta_time(t_a, t);
     auto k = t_ac / t_ab;
     Eigen::Quaterniond q_c = q_a.slerp(k, q_b).normalized();
@@ -245,9 +259,21 @@ void Gimbal::read_thread()
     }
 
     Eigen::Quaterniond q_proto(rx_data_.q[0], rx_data_.q[1], rx_data_.q[2], rx_data_.q[3]);
-    queue_.push({adapt_rx_quaternion(q_proto), t});
+    auto q = adapt_rx_quaternion(q_proto);
+    queue_.push({q, t});
+
+    if (!first_packet_received_.exchange(true)) {
+      tools::logger()->info("[Gimbal] First q received.");
+      if (adapter_.enabled) {
+        tools::logger()->info(
+          "[Gimbal] Protocol adapter enabled: rx(yaw={}, pitch={}, roll={}), tx(yaw={}, pitch={})",
+          adapter_.rx_yaw_sign, adapter_.rx_pitch_sign, adapter_.rx_roll_sign, adapter_.tx_yaw_sign,
+          adapter_.tx_pitch_sign);
+      }
+    }
 
     std::lock_guard<std::mutex> lock(mutex_);
+    latest_q_ = q;
 
     const auto rx_yaw_sign = adapter_.enabled ? adapter_.rx_yaw_sign : 1;
     const auto rx_pitch_sign = adapter_.enabled ? adapter_.rx_pitch_sign : 1;
