@@ -538,7 +538,7 @@ def keyboard_run(forwarder, move_speed=0.3, turn_speed=1.0, send_rate=100):
         print("[INFO] Shutdown complete.")
 
 
-def ros2_run(forwarder, topic='/cmd_vel', robot_control_topic='/robot_control'):
+def ros2_run(forwarder, topic='/cmd_vel', robot_control_topic='/robot_control', disable_status_pub=False):
     """ROS2 subscriber mode - forward Twist and RobotControl messages to serial."""
     try:
         import rclpy
@@ -575,12 +575,14 @@ def ros2_run(forwarder, topic='/cmd_vel', robot_control_topic='/robot_control'):
                     '[ROS2] rm_decision_interfaces not available; RobotControl forwarding disabled'
                 )
 
-            if GameStatus is not None and RobotStatus is not None:
+            if (not disable_status_pub) and GameStatus is not None and RobotStatus is not None:
                 self.game_status_pub = self.create_publisher(GameStatus, '/game_status', 1)
                 self.robot_status_pub = self.create_publisher(RobotStatus, '/robot_status', 10)
                 self.forwarder.on_game_status = self.publish_game_status
                 self.forwarder.on_robot_status = self.publish_robot_status
                 self.get_logger().info('[ROS2] Publishing /game_status and /robot_status from bridge telemetry')
+            elif disable_status_pub:
+                self.get_logger().info('[ROS2] Status publishing disabled by flag; not publishing /game_status or /robot_status')
             else:
                 self.get_logger().warning(
                     '[ROS2] rm_decision_interfaces not available; referee status publishing disabled'
@@ -751,6 +753,7 @@ def main():
 
     parser.add_argument('--topic', default='/cmd_vel', help='ROS2 Twist topic name (default: /cmd_vel)')
     parser.add_argument('--robot-control-topic', default='/robot_control', help='ROS2 RobotControl topic name (default: /robot_control)')
+    parser.add_argument('--disable-status-pub', action='store_true', help='Disable publishing /game_status and /robot_status from bridge telemetry')
 
     parser.add_argument('--speed', type=float, default=0.3, help='Movement speed for keyboard (0.0-1.0)')
     parser.add_argument('--rate', type=int, default=200, help='Send rate in Hz')
@@ -774,7 +777,12 @@ def main():
                 sys.exit(1)
             keyboard_run(fwd, move_speed=args.speed, send_rate=args.rate)
         elif args.ros2:
-            ros2_run(fwd, topic=args.topic, robot_control_topic=args.robot_control_topic)
+            ros2_run(
+                fwd,
+                topic=args.topic,
+                robot_control_topic=args.robot_control_topic,
+                disable_status_pub=args.disable_status_pub,
+            )
         else:
             print("[ERROR] Please specify a mode:")
             print("\n[USAGE 1] One-shot velocity:")
