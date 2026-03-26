@@ -37,6 +37,9 @@ cmake build_dir=default_build_dir profile=default_profile use_tensorrt=default_u
   if [[ -z "${ov_dir}" && -d "/home/nyu/venvs/spvision/lib/python3.10/site-packages/openvino/cmake" ]]; then \
     ov_dir="/home/nyu/venvs/spvision/lib/python3.10/site-packages/openvino/cmake"; \
   fi; \
+  if [[ -z "${ov_dir}" && -d "/home/nyu/.local/lib/python3.10/site-packages/openvino/cmake" ]]; then \
+    ov_dir="/home/nyu/.local/lib/python3.10/site-packages/openvino/cmake"; \
+  fi; \
   if [[ -z "${ov_dir}" ]]; then \
     for candidate in /opt/intel/openvino_*/runtime/cmake; do \
       if [[ -d "${candidate}" ]]; then \
@@ -123,6 +126,9 @@ ensure-configured build_dir=default_build_dir profile=default_profile use_tensor
   fi; \
   if [[ -z "${requested_ov_dir}" && -d "/home/nyu/venvs/spvision/lib/python3.10/site-packages/openvino/cmake" ]]; then \
     requested_ov_dir="/home/nyu/venvs/spvision/lib/python3.10/site-packages/openvino/cmake"; \
+  fi; \
+  if [[ -z "${requested_ov_dir}" && -d "/home/nyu/.local/lib/python3.10/site-packages/openvino/cmake" ]]; then \
+    requested_ov_dir="/home/nyu/.local/lib/python3.10/site-packages/openvino/cmake"; \
   fi; \
   if [[ -z "${requested_ov_dir}" ]]; then \
     for candidate in /opt/intel/openvino_*/runtime/cmake; do \
